@@ -1,0 +1,22 @@
+{
+  "proxyPort": 8080,
+  "idleThreshold": 259200,
+  "domain": "yourdomain.com",
+  "services": [
+    {
+      "route": "jellyfin",
+      "target": "http://localhost:8096",
+      "composeDir": "/path/to/jellyfin"
+    },
+    {
+      "route": "portainer",
+      "target": "http://localhost:9000",
+      "composeDir": "/path/to/portainer"
+    },
+    {
+      "route": "photos",
+      "target": "http://localhost:2283",
+      "composeDir": "/path/to/immich"
+    }
+  ]
+}

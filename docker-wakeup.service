@@ -1,0 +1,28 @@
+[Unit]
+Description=Docker Wake-Up Proxy
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=replace-with-your-username
+Group=docker
+WorkingDirectory=/full/path/to/docker-wakeup/wake-proxy
+ExecStart=/usr/bin/node dist/wake-proxy.js
+Restart=always
+RestartSec=10
+Environment=NODE_ENV=production
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=docker-wakeup
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target

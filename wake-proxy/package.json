@@ -1,0 +1,24 @@
+{
+  "name": "wake-proxy",
+  "version": "1.0.0",
+  "main": "dist/wake-proxy.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/wake-proxy.js",
+    "dev": "ts-node src/wake-proxy.ts"
+  },
+  "dependencies": {
+    "axios": "^1.10.0",
+    "docker-compose": "^1.2.0",
+    "express": "^4.19.2",
+    "http-proxy-middleware": "^2.0.6"
+  },
+  "devDependencies": {
+    "@types/axios": "^0.14.4",
+    "@types/connect": "^3.4.38",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.19.4",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.4.5"
+  }
+}
