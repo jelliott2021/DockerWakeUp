@@ -14,6 +14,17 @@
 - **Easy Configuration**: Single JSON file configuration for all services
 - **Automated Setup**: One-command installation with setup script
 
+## Overview
+
+**Docker Wake Up** is a lightweight tool designed to help users reverse proxy Dockerized applications (like Immich, Nextcloud, Portainer, etc.) to clean URLs such as `yourdomain.com/photos`.
+
+In addition to proxying, it provides smart container management by:
+
+- **Automatically starting** Docker services when they are accessed.
+- **Shutting them down** after a period of inactivity (optional).
+
+This is especially useful for self-hosted environments where you want to conserve resources by running only the services you actually need, while still keeping them easily accessible on demand.
+
 ## Table of Contents 📋
 
 - [Features](#features-)
