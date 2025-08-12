@@ -66,15 +66,9 @@ This is especially useful for self-hosted environments where you want to conserv
    ./setup-service.sh
    ```
 
-5. **Setup idle shutdown (optional)**
-   ```bash
-   # Make the script executable
-   chmod +x idle-shutdown/idle-shutdown.sh
-   
-   # Add to crontab (runs every 5 minutes)
-   crontab -e
-   # Add: */5 * * * * /full/path/to/idle-shutdown/idle-shutdown.sh
-   ```
+5. **Idle shutdown is now built-in!**
+   - No separate script or cron job needed.
+   - The wake-proxy automatically monitors and stops idle containers every 5 minutes based on your `idleThreshold` in `config.json`.
 
 The setup script will automatically:
 - Build all components (wake-proxy and nginx-generator)
@@ -281,15 +275,6 @@ If you prefer manual setup or need custom configuration:
    sudo systemctl status docker-wakeup
    ```
 
-7. **Setup idle shutdown (optional)**
-   ```bash
-   # Make the script executable
-   chmod +x idle-shutdown/idle-shutdown.sh
-   
-   # Add to crontab (runs every 5 minutes)
-   crontab -e
-   # Add: */5 * * * * /full/path/to/idle-shutdown/idle-shutdown.sh
-   ```
 
 ### Common SystemD Commands
 
@@ -323,7 +308,7 @@ sudo systemctl is-active docker-wakeup                 # Check if running
          │                       │                    │
          │              ┌────────▼────────┐          │
          │              │ Idle Shutdown   │          │
-         │              │   (Cron Job)    │          │
+         │              │ (Integrated)    │          │
          │              └─────────────────┘          │
          │                                           │
          └───────────────── Config.json ─────────────┘
@@ -331,8 +316,7 @@ sudo systemctl is-active docker-wakeup                 # Check if running
 
 The system works in three layers:
 1. **NGINX** handles SSL termination and routes requests to the wake proxy
-2. **Wake Proxy** manages container lifecycle and proxies requests
-3. **Idle Shutdown** monitors and stops unused containers
+2. **Wake Proxy** manages container lifecycle, proxies requests, and now also monitors/stops unused containers (idle shutdown is integrated)
 
 ## Configuration ⚙️
 
@@ -406,13 +390,12 @@ Automatically generates SSL-enabled NGINX configurations:
 - Proxy headers for proper forwarding
 - Buffering optimization
 
-### 3. Idle Shutdown (`idle-shutdown/`)
+### 3. Idle Shutdown (Integrated)
 
-A bash script that monitors and stops unused containers:
-- Tracks last access times from proxy logs
-- Compares against configurable idle threshold
-- Safely stops containers that haven't been used
-- Designed to run as a cron job
+Idle shutdown is now part of the wake-proxy service:
+- Monitors last access times for each service
+- Stops containers that have been idle longer than your configured threshold
+- Runs automatically every 5 minutes—no cron job or shell script required
 
 ## Service Management ⚙️
 
@@ -544,16 +527,14 @@ docker-wakeup/
 │   ├── package.json           # Dependencies
 │   ├── tsconfig.json          # TypeScript config
 │   └── dist/                  # Compiled JavaScript
-├── nginx-generator/            # NGINX config generator
-│   ├── generate-nginx.ts      # Generator script
-│   ├── package.json           # Dependencies
-│   ├── tsconfig.json          # TypeScript config
-│   └── confs/                 # Generated configs
-│       ├── jellyfin.conf
-│       ├── portainer.conf
-│       └── ...
-└── idle-shutdown/              # Container management
-    └── idle-shutdown.sh       # Idle monitoring script
+└─ nginx-generator/            # NGINX config generator
+    ├── generate-nginx.ts      # Generator script
+    ├── package.json           # Dependencies
+    ├── tsconfig.json          # TypeScript config
+    └── confs/                 # Generated configs
+        ├── jellyfin.conf
+        ├── portainer.conf
+        └── ...
 ```
 
 ## Requirements 🔧
