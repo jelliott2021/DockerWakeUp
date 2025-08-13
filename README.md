@@ -54,6 +54,7 @@ This is especially useful for self-hosted environments where you want to conserv
 
 2. **Configure your services**
    ```bash
+   cp config.json.example config.json # Copy example to config
    nano config.json  # Edit with your service details
    ```
 
@@ -513,7 +514,7 @@ docker ps
 
 ```
 docker-wakeup/
-├── config.json                 # Main configuration file
+├── config.json                 # Main configuration file (Should intially be made by you)
 ├── config.json.example         # Example configuration
 ├── README.md                   # This file
 ├── LICENSE                     # MIT license
