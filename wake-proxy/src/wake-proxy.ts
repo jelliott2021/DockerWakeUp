@@ -22,7 +22,7 @@ if (!fs.existsSync('/bin/sh')) {
   throw new Error('/bin/sh does not exist or is not accessible');
 }
 
-const config: Config = JSON.parse(fs.readFileSync("/home/jelliott/docker-wake-up/config.json", "utf8"));
+const config: Config = JSON.parse(fs.readFileSync(path.join(__dirname, '../../config.json'), "utf8"));
 const app = express();
 
 // Prevent repeated wake-ups for the same service
