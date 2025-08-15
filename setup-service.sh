@@ -68,8 +68,6 @@ SyslogIdentifier=docker-wakeup
 # Security
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/tmp
 
 [Install]
 WantedBy=multi-user.target
