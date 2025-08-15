@@ -1,30 +1,11 @@
-# Node modules
 node_modules/
-
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Dependency directories
-jspm_packages/
-
-# Optional npm cache directory
-.npm
-
-# dotenv environment variables file
-.env
-
-# OS generated files
 .DS_Store
 Thumbs.db
-
-# Build output folders (if you use any)
-dist/
-build/
-
-# Optional lock files if you want to ignore them
-package-lock.json
-yarn.lock
+nginx-generator/confs/*
+!nginx-generator/confs/example.conf
+wake-proxy/dist/
+wake-proxy/node_modules/
+wake-proxy/tmp/
+nginx-generator/dist/
+nginx-generator/node_modules/
+config.json

@@ -68,8 +68,6 @@ SyslogIdentifier=docker-wakeup
 # Security
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/tmp
 
 [Install]
 WantedBy=multi-user.target
@@ -268,12 +266,10 @@ if [ ! -f "$SCRIPT_DIR/config.json" ] || [ -f "$SCRIPT_DIR/config.json.example" 
     echo "1. ⚠️  IMPORTANT: Edit config.json with your actual service details"
     echo "2. Re-run the script or manually generate NGINX configs: cd nginx-generator && npm run generate"
     echo "3. Reload NGINX: sudo systemctl reload nginx"
-    echo "4. Set up the idle shutdown cron job if desired"
 else
     echo "1. ✅ NGINX configurations have been generated"
     echo "2. Reload NGINX to activate: sudo systemctl reload nginx"
-    echo "3. Set up the idle shutdown cron job if desired"
-    echo "4. Your wake-proxy service should now be running!"
+    echo "3. Your wake-proxy service should now be running!"
 fi
 
 echo ""

@@ -4,6 +4,7 @@ import axios from "axios";
 import { exec } from 'child_process';
 import fs from "fs";
 import path from "path";
+import { startIdleShutdownChecker } from "./idleShutdown";
 
 interface ServiceConfig {
   route: string;
@@ -14,18 +15,27 @@ interface ServiceConfig {
 interface Config {
   proxyPort: number;
   services: ServiceConfig[];
+  idleThreshold: number;
 }
 
 if (!fs.existsSync('/bin/sh')) {
   throw new Error('/bin/sh does not exist or is not accessible');
 }
 
-const config: Config = JSON.parse(fs.readFileSync("/home/jelliott/docker-wake-up/config.json", "utf8"));
+const config: Config = JSON.parse(fs.readFileSync(path.join(__dirname, '../../config.json'), "utf8"));
 const app = express();
 
 // Prevent repeated wake-ups for the same service
 const cooldown: Record<string, number> = {};
 const COOLDOWN_MS = 60_000; // 60 seconds
+
+// tmp folder inside the service's working directory
+const tmpDir = path.join(process.cwd(), "tmp");
+
+// create the tmp folder if it doesn't exist
+if (!fs.existsSync(tmpDir)) {
+  fs.mkdirSync(tmpDir, { recursive: true });
+}
 
 const SERVICES: Record<string, ServiceConfig> = {};
 config.services.forEach((svc) => {
@@ -38,16 +48,18 @@ Object.entries(SERVICES).forEach(([route, svc]) => {
     changeOrigin: true,
     ws: true,
     pathRewrite: { [`^/proxy/${route}`]: "" },
-    onProxyRes: (proxyRes, req, res) => {
+    onProxyRes: (proxyRes: any, req: any, res: any) => {
       if (proxyRes.statusCode && proxyRes.statusCode >= 200 && proxyRes.statusCode < 400) {
         try {
-          fs.writeFileSync(`/tmp/last_access_${route}`, Date.now().toString());
+          // write the last access file inside tmp
+          const filePath = path.join(tmpDir, `last_access_${route}`);
+          fs.writeFileSync(filePath, Date.now().toString());
         } catch (e) {
           console.error(`Failed to write last access file for ${route}:`, e);
         }
       }
     },
-    onError: async (err, req, res, next) => {
+    onError: async (err: any, req: any, res: any, next: any) => {
       console.warn(`Initial proxy to ${route} failed, attempting recovery...`);
 
       // Cooldown logic to avoid rapid retries
@@ -86,16 +98,20 @@ Object.entries(SERVICES).forEach(([route, svc]) => {
   app.use(`/proxy/${route}`, proxy);
 });
 
+
 app.listen(config.proxyPort || 8080, () => {
   console.log(`Wake proxy listening on port ${config.proxyPort}`);
 });
+
+// Start idle shutdown checker (interval: 5 min)
+startIdleShutdownChecker(SERVICES, config.idleThreshold);
 
 async function bringUpService(composeDir: string): Promise<string> {
 
   return new Promise((resolve, reject) => {
     const cmd = "docker compose -f docker-compose.yml up -d";
 
-    exec(cmd, { cwd: composeDir, env: process.env }, (err, stdout, stderr) => {
+    exec(cmd, { cwd: composeDir, env: process.env }, (err: Error | null, stdout: string, stderr: string) => {
       if (!err) {
         return resolve(stdout);
       }
@@ -120,7 +136,7 @@ async function bringUpService(composeDir: string): Promise<string> {
         console.warn(`Container conflict detected: ${containerName}. Attempting to remove...`);
 
         // Remove the conflicting container
-        exec(`docker rm -f ${containerName}`, { env: process.env }, (rmErr, rmOut, rmStderr) => {
+        exec(`docker rm -f ${containerName}`, { env: process.env }, (rmErr: Error | null, rmOut: string, rmStderr: string) => {
           if (rmErr) {
             console.error(`Failed to remove conflicting container: ${rmStderr}`);
             return reject(rmErr);
@@ -129,7 +145,7 @@ async function bringUpService(composeDir: string): Promise<string> {
           console.log(`Removed ${containerName}. Retrying docker compose...`);
 
           // Retry docker compose
-          exec(cmd, { cwd: composeDir, env: process.env }, (retryErr, retryOut, retryStderr) => {
+          exec(cmd, { cwd: composeDir, env: process.env }, (retryErr: Error | null, retryOut: string, retryStderr: string) => {
             if (retryErr) {
               console.error(`Retry failed: ${retryStderr}`);
               return reject(retryErr);
