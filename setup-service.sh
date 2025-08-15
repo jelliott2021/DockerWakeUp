@@ -12,9 +12,40 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        # Function to check and update to latest git version from canonical remote
+        update_from_git() {
+            CANONICAL_REMOTE="https://github.com/jelliott2021/DockerWakeUp.git"
+            if [ -d "$SCRIPT_DIR/.git" ]; then
+                echo -e "${YELLOW}Checking for latest code from canonical git remote...${NC}"
+                cd "$SCRIPT_DIR"
+                git fetch "$CANONICAL_REMOTE" HEAD:refs/remotes/origin-upstream 2>/dev/null
+                LOCAL=$(git rev-parse HEAD)
+                REMOTE=$(git rev-parse refs/remotes/origin-upstream)
+                BASE=$(git merge-base HEAD refs/remotes/origin-upstream)
+                if [ "$LOCAL" = "$REMOTE" ]; then
+                    echo -e "${GREEN}You are already on the latest version of the code.${NC}"
+                elif [ "$LOCAL" = "$BASE" ]; then
+                    echo -e "${YELLOW}Your local code is behind the canonical remote. Updating now...${NC}"
+                    git pull "$CANONICAL_REMOTE" HEAD
+                    echo -e "${GREEN}Code updated. Please re-run this script if you want to continue setup.${NC}"
+                    exit 0
+                elif [ "$REMOTE" = "$BASE" ]; then
+                    echo -e "${YELLOW}Your local code is ahead of the canonical remote. (Local changes not pushed)${NC}"
+                else
+                    echo -e "${RED}Your local and canonical remote branches have diverged. Please resolve manually.${NC}"
+                    exit 1
+                fi
+                cd "$SCRIPT_DIR"
+            else
+                echo -e "${RED}Not a git repository. Cannot update from remote.${NC}"
+            fi
+        }
 WAKE_PROXY_DIR="$SCRIPT_DIR/wake-proxy"
+
+
 
 echo -e "${BLUE}Docker Wake-Up Service Setup${NC}"
 echo "================================"
@@ -220,15 +251,45 @@ generate_nginx_configs() {
     fi
 }
 
-# Main menu
+
+# --- Git update check before menu ---
+CANONICAL_REMOTE="https://github.com/jelliott2021/DockerWakeUp.git"
+GIT_UPDATE_OPTION=""
+GIT_UP_TO_DATE=true
+if [ -d "$SCRIPT_DIR/.git" ]; then
+    git fetch "$CANONICAL_REMOTE" HEAD:refs/remotes/origin-upstream 2>/dev/null
+    LOCAL=$(git rev-parse HEAD)
+    REMOTE=$(git rev-parse refs/remotes/origin-upstream)
+    BASE=$(git merge-base HEAD refs/remotes/origin-upstream)
+    if [ "$LOCAL" = "$REMOTE" ]; then
+        echo -e "${GREEN}You are already on the latest version of the code.${NC}"
+    elif [ "$LOCAL" = "$BASE" ]; then
+        echo -e "${YELLOW}Your local code is behind the canonical remote. You should update to the latest version!${NC}"
+        GIT_UPDATE_OPTION=1
+        GIT_UP_TO_DATE=false
+    elif [ "$REMOTE" = "$BASE" ]; then
+        echo -e "${YELLOW}Your local code is ahead of the canonical remote. (Local changes not pushed)${NC}"
+    else
+        echo -e "${RED}Your local and canonical remote branches have diverged. Please resolve manually.${NC}"
+        GIT_UPDATE_OPTION=1
+        GIT_UP_TO_DATE=false
+    fi
+fi
+
 echo "Please choose how you want to run the wake-proxy service:"
 echo "1) SystemD service + NGINX configs (recommended for production)"
 echo "2) PM2 process manager + NGINX configs"
 echo "3) Build project only (no service setup)"
 echo "4) Generate NGINX configs only"
 echo "5) Exit"
-echo ""
-read -p "Enter your choice (1-5): " choice
+if [ "$GIT_UPDATE_OPTION" = "1" ]; then
+    echo "6) Update to latest version from GitHub"
+    echo ""
+    read -p "Enter your choice (1-6): " choice
+else
+    echo ""
+    read -p "Enter your choice (1-5): " choice
+fi
 
 case $choice in
     1)
@@ -251,6 +312,9 @@ case $choice in
     5)
         echo -e "${GREEN}Exiting...${NC}"
         exit 0
+        ;;
+    6)
+        update_from_git
         ;;
     *)
         echo -e "${RED}Invalid choice. Please run the script again.${NC}"
