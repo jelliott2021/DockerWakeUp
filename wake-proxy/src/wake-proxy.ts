@@ -29,6 +29,14 @@ const app = express();
 const cooldown: Record<string, number> = {};
 const COOLDOWN_MS = 60_000; // 60 seconds
 
+// tmp folder inside the service's working directory
+const tmpDir = path.join(process.cwd(), "tmp");
+
+// create the tmp folder if it doesn't exist
+if (!fs.existsSync(tmpDir)) {
+  fs.mkdirSync(tmpDir, { recursive: true });
+}
+
 const SERVICES: Record<string, ServiceConfig> = {};
 config.services.forEach((svc) => {
   SERVICES[svc.route] = svc;
@@ -43,7 +51,9 @@ Object.entries(SERVICES).forEach(([route, svc]) => {
     onProxyRes: (proxyRes: any, req: any, res: any) => {
       if (proxyRes.statusCode && proxyRes.statusCode >= 200 && proxyRes.statusCode < 400) {
         try {
-          fs.writeFileSync(`/tmp/last_access_${route}`, Date.now().toString());
+          // write the last access file inside tmp
+          const filePath = path.join(tmpDir, `last_access_${route}`);
+          fs.writeFileSync(filePath, Date.now().toString());
         } catch (e) {
           console.error(`Failed to write last access file for ${route}:`, e);
         }

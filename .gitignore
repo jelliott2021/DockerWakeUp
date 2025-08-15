@@ -5,6 +5,7 @@ nginx-generator/confs/*
 !nginx-generator/confs/example.conf
 wake-proxy/dist/
 wake-proxy/node_modules/
+wake-proxy/tmp/
 nginx-generator/dist/
 nginx-generator/node_modules/
 config.json
