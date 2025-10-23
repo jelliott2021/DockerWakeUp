@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { execSync } from "child_process";
 
 const configPath = path.resolve(__dirname, "../config.json");
 const outputDir = path.resolve(__dirname, "./confs");
@@ -28,6 +29,22 @@ const domain: string = config.domain || "boozebrawl.com";
 
 if (!fs.existsSync(outputDir)) {
   fs.mkdirSync(outputDir, { recursive: true });
+}
+
+// Clean up broken symlinks in targetDir
+for (const file of fs.readdirSync(targetDir)) {
+  const dest = path.join(targetDir, file);
+  try {
+    if (fs.lstatSync(dest).isSymbolicLink()) {
+      const target = fs.readlinkSync(dest);
+      if (!fs.existsSync(target)) {
+        fs.unlinkSync(dest);
+        console.log(`Removed broken symlink: ${dest}`);
+      }
+    }
+  } catch {
+    // ignore
+  }
 }
 
 // Create NGINX config files for each service
@@ -92,3 +109,17 @@ fs.readdirSync(outputDir).forEach(file => {
     }
   }
 });
+
+// === Reload NGINX ===
+try {
+  console.log("\nValidating NGINX config...");
+  execSync("sudo nginx -t", { stdio: "inherit" });
+
+  console.log("Reloading NGINX...");
+  execSync("sudo systemctl reload nginx", { stdio: "inherit" });
+
+  console.log("NGINX reloaded successfully!");
+} catch (error) {
+  console.error("NGINX reload failed. Check the configuration above.");
+  process.exit(1);
+}

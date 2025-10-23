@@ -226,7 +226,7 @@ generate_nginx_configs() {
     if [ -d "$SCRIPT_DIR/nginx-generator" ]; then
         echo -e "${BLUE}Generating NGINX configuration files...${NC}"
         cd "$SCRIPT_DIR/nginx-generator"
-        npm run generate
+        sudo npm run generate
         
         if [ $? -eq 0 ]; then
             echo -e "${GREEN}✅ NGINX configurations generated successfully!${NC}"
