@@ -109,7 +109,7 @@ startIdleShutdownChecker(SERVICES, config.idleThreshold);
 async function bringUpService(composeDir: string): Promise<string> {
 
   return new Promise((resolve, reject) => {
-    const cmd = "docker compose -f docker-compose.yml up -d";
+    const cmd = "docker compose up -d";
 
     exec(cmd, { cwd: composeDir, env: process.env }, (err: Error | null, stdout: string, stderr: string) => {
       if (!err) {
@@ -121,10 +121,21 @@ async function bringUpService(composeDir: string): Promise<string> {
         console.error("/bin/sh does not exist or is not accessible");
       }
 
-      // Check if docker-compose.yml exists in the service directory
-      const composeFile = path.join(composeDir, "docker-compose.yml");
-      if (!fs.existsSync(composeFile)) {
-        console.error(`Missing docker-compose.yml at: ${composeFile}`);
+      // Check if compose directory exists
+      if (!fs.existsSync(composeDir)) {
+        console.error(`Compose directory does not exist: ${composeDir}`);
+      } else {
+        // Check for compose file with various naming conventions
+        const composeFiles = [
+          "docker-compose.yml",
+          "docker-compose.yaml", 
+          "compose.yml",
+          "compose.yaml"
+        ];
+        const foundFile = composeFiles.find(f => fs.existsSync(path.join(composeDir, f)));
+        if (!foundFile) {
+          console.error(`Missing compose file in ${composeDir}. Expected one of: ${composeFiles.join(", ")}`);
+        }
       }
 
       console.error(stderr);
