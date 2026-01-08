@@ -41,7 +41,7 @@ function getLastAccessTime(lastFile: string): number {
 }
 
 function stopService(serviceName: string, composeDir: string) {
-  const cmd = "docker compose -f docker-compose.yml stop";
+  const cmd = "docker compose stop";
   
   exec(cmd, { cwd: composeDir }, (err, stdout, stderr) => {
     if (err) {
