@@ -11,7 +11,7 @@ if (!fs.existsSync(tmpDir)) {
 }
 
 export function startIdleShutdownChecker(
-  services: Record<string, { route: string; composeDir: string }>,
+  services: Record<string, { route: string; composeDir: string; autoOff?: boolean }>,
   idleThreshold: number
 ) {
   setInterval(() => {
@@ -21,7 +21,8 @@ export function startIdleShutdownChecker(
       const now = Date.now();
       const idleTime = now - lastAccess;
 
-      if (idleTime > idleThreshold * 1000) {
+      // Only stop if autoOff is not false (default true)
+      if ((svc.autoOff !== false) && idleTime > idleThreshold * 1000) {
         stopService(svc.route, svc.composeDir);
       }
     });

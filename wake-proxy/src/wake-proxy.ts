@@ -10,6 +10,7 @@ interface ServiceConfig {
   route: string;
   target: string;
   composeDir: string;
+  autoOff?: boolean;
 }
 
 interface Config {
