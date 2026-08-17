@@ -1,22 +1,24 @@
 {
   "proxyPort": 8080,
   "idleThreshold": 259200,
-  "domain": "yourdomain.com",
+  "domain": "example.com",
   "services": [
     {
       "route": "jellyfin",
       "target": "http://localhost:8096",
-      "composeDir": "/path/to/jellyfin"
+      "composeDir": "/home/youruser/jellyfin"
     },
     {
       "route": "portainer",
       "target": "http://localhost:9000",
-      "composeDir": "/path/to/portainer"
+      "composeDir": "/home/youruser/portainer",
+      "autoOff": false
     },
     {
       "route": "photos",
       "target": "http://localhost:2283",
-      "composeDir": "/path/to/immich"
+      "composeDir": "/home/youruser/immich-app",
+      "wakePage": "examples/custom-wake-page.html"
     }
   ]
 }

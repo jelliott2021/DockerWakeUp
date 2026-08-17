@@ -10,6 +10,7 @@
 - **Intelligent Idle Management**: Monitors container usage and stops idle containers after configurable timeout
 - **Automatic NGINX Configuration**: Generates SSL-enabled NGINX reverse proxy configurations
 - **Zero-Downtime Experience**: Seamless proxying with startup loading pages
+- **Live Startup Page**: Browsers see a "starting server" page with live `docker compose` logs that auto-reloads when the service is ready — or bring your own custom HTML page
 - **Resource Efficient**: Only runs containers when needed, saving CPU and memory
 - **Easy Configuration**: Single JSON file configuration for all services
 - **Automated Setup**: One-command installation with setup script
@@ -351,6 +352,7 @@ Edit `config.json` to define your services:
 | `idleThreshold` | Time in seconds before stopping idle containers | `259200` (3 days) |
 | `domain` | Your domain name for generating subdomains | `"example.com"` |
 | `services` | Array of service configurations | `[]` |
+| `wakePage` | Optional path to a custom "starting up" HTML page used for all services (relative to the project root) | built-in page |
 
 ### Service Configuration
 
@@ -359,6 +361,28 @@ Edit `config.json` to define your services:
 | `route` | Subdomain/route name | `"jellyfin"` |
 | `target` | Local URL where the service runs | `"http://localhost:8096"` |
 | `composeDir` | Directory containing docker-compose.yml | `"/path/to/service"` |
+| `wakePage` | Optional per-service custom "starting up" HTML page (overrides the global `wakePage`) | `"examples/custom-wake-page.html"` |
+
+### Startup Page 🕓
+
+When a browser hits a sleeping service, the wake proxy immediately responds with a
+startup page instead of leaving the request hanging. The default page shows a
+spinner, elapsed time, and the live `docker compose logs -f` output of the waking
+service, then reloads automatically once the service answers HTTP. Non-browser
+requests (APIs, assets) still wait for the service and are retried transparently.
+
+To use your own page, set `wakePage` in `config.json` (globally or per-service) to
+an HTML file. `{{route}}` inside the file is replaced with the service's route
+name. Your page can use two same-origin endpoints:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET __wake/status` | JSON: `{ state, ready, startedAt, error }` — `state` is `idle`/`starting`/`ready`/`failed`; reload the page when `ready` is `true` |
+| `GET __wake/logs` | Server-Sent Events stream of `docker compose logs -f` (each event is one JSON-encoded log line) |
+
+See [examples/custom-wake-page.html](examples/custom-wake-page.html) for a
+minimal working example, including the URL-prefix handling needed to work both
+behind NGINX and when accessing the wake proxy directly.
 
 ## Components 🧩
 

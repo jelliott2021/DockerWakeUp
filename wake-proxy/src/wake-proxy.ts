@@ -1,22 +1,30 @@
 import express from "express";
 import { createProxyMiddleware } from "http-proxy-middleware";
-import axios from "axios";
-import { exec } from 'child_process';
 import fs from "fs";
 import path from "path";
 import { startIdleShutdownChecker } from "./idleShutdown";
+import {
+  triggerWake,
+  getWakeStatus,
+  streamComposeLogs,
+  isHttpReady,
+  waitForHttpReady,
+} from "./wakeManager";
+import { renderWakePage } from "./wakePage";
 
 interface ServiceConfig {
   route: string;
   target: string;
   composeDir: string;
   autoOff?: boolean;
+  wakePage?: string; // optional custom "starting up" page (path to an HTML file)
 }
 
 interface Config {
   proxyPort: number;
   services: ServiceConfig[];
   idleThreshold: number;
+  wakePage?: string; // default custom wake page for all services
 }
 
 if (!fs.existsSync('/bin/sh')) {
@@ -25,10 +33,6 @@ if (!fs.existsSync('/bin/sh')) {
 
 const config: Config = JSON.parse(fs.readFileSync(path.join(__dirname, '../../config.json'), "utf8"));
 const app = express();
-
-// Prevent repeated wake-ups for the same service
-const cooldown: Record<string, number> = {};
-const COOLDOWN_MS = 60_000; // 60 seconds
 
 // tmp folder inside the service's working directory
 const tmpDir = path.join(process.cwd(), "tmp");
@@ -43,60 +47,135 @@ config.services.forEach((svc) => {
   SERVICES[svc.route] = svc;
 });
 
-Object.entries(SERVICES).forEach(([route, svc]) => {
-  const proxy = createProxyMiddleware({
+// ---------------------------------------------------------------------------
+// Wake status endpoints (must be registered BEFORE the proxy middleware).
+// Behind nginx, the browser requests /__wake/... which nginx rewrites to
+// /proxy/<route>/__wake/...; direct access uses the full path.
+// ---------------------------------------------------------------------------
+
+// JSON readiness poll used by the wake page
+app.get("/proxy/:route/__wake/status", async (req, res) => {
+  const svc = SERVICES[req.params.route];
+  if (!svc) {
+    res.status(404).json({ error: "unknown service" });
+    return;
+  }
+  const status = getWakeStatus(req.params.route);
+  const ready = await isHttpReady(svc.target);
+  res.json({
+    state: status.state,
+    ready,
+    startedAt: status.startedAt,
+    error: status.error,
+  });
+});
+
+// Live docker compose logs streamed as Server-Sent Events
+app.get("/proxy/:route/__wake/logs", (req, res) => {
+  const svc = SERVICES[req.params.route];
+  if (!svc) {
+    res.sendStatus(404);
+    return;
+  }
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no", // disable nginx buffering for this response
+  });
+  res.write("retry: 3000\n\n");
+
+  const stopLogs = streamComposeLogs(svc.composeDir, (line) => {
+    res.write(`data: ${JSON.stringify(line)}\n\n`);
+  });
+
+  // Keep intermediaries from closing an otherwise-quiet connection
+  const ping = setInterval(() => res.write(": ping\n\n"), 15_000);
+
+  req.on("close", () => {
+    clearInterval(ping);
+    stopLogs();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Service proxies
+// ---------------------------------------------------------------------------
+
+function proxyOptions(route: string, svc: ServiceConfig, withHandlers: boolean) {
+  return {
     target: svc.target,
     changeOrigin: true,
     ws: true,
     pathRewrite: { [`^/proxy/${route}`]: "" },
-    onProxyRes: (proxyRes: any, req: any, res: any) => {
-      if (proxyRes.statusCode && proxyRes.statusCode >= 200 && proxyRes.statusCode < 400) {
-        try {
-          // write the last access file inside tmp
-          const filePath = path.join(tmpDir, `last_access_${route}`);
-          fs.writeFileSync(filePath, Date.now().toString());
-        } catch (e) {
-          console.error(`Failed to write last access file for ${route}:`, e);
-        }
+    onProxyReq: (proxyReq: any, req: any, res: any) => {
+      // Preserve original headers for proper CORS/CSRF handling
+      if (req.headers['x-forwarded-host']) {
+        proxyReq.setHeader('X-Forwarded-Host', req.headers['x-forwarded-host']);
+        proxyReq.setHeader('Host', req.headers['x-forwarded-host']);
+      }
+      if (req.headers['x-forwarded-proto']) {
+        proxyReq.setHeader('X-Forwarded-Proto', req.headers['x-forwarded-proto']);
       }
     },
-    onError: async (err: any, req: any, res: any, next: any) => {
-      console.warn(`Initial proxy to ${route} failed, attempting recovery...`);
-
-      // Cooldown logic to avoid rapid retries
-      const now = Date.now();
-      if (cooldown[route] && now - cooldown[route] < COOLDOWN_MS) {
-        console.log(`Skipping recovery for ${route}: in cooldown.`);
-        if (res && !res.headersSent) {
-          res.writeHead(503, { "Content-Type": "text/html" });
-          res.end(`<h1>${route} is starting up. Try again in a few seconds.</h1>`);
+    ...(withHandlers ? {
+      onProxyRes: (proxyRes: any, req: any, res: any) => {
+        if (proxyRes.statusCode && proxyRes.statusCode >= 200 && proxyRes.statusCode < 400) {
+          try {
+            // write the last access file inside tmp
+            const filePath = path.join(tmpDir, `last_access_${route}`);
+            fs.writeFileSync(filePath, Date.now().toString());
+          } catch (e) {
+            console.error(`Failed to write last access file for ${route}:`, e);
+          }
         }
-        return;
-      }
-      cooldown[route] = now;
+      },
+      onError: (err: any, req: any, res: any, next: any) => handleProxyError(route, svc, req, res, next),
+    } : {}),
+  };
+}
 
-      try {
-        await bringUpService(svc.composeDir);
-        await waitForHttpReady(svc.target, 60000);
+async function handleProxyError(route: string, svc: ServiceConfig, req: any, res: any, next: any) {
+  console.warn(`Proxy to ${route} failed, waking service...`);
 
-        // Retry proxy once after startup
-        createProxyMiddleware({
-          target: svc.target,
-          changeOrigin: true,
-          ws: true,
-          pathRewrite: { [`^/proxy/${route}`]: "" },
-        })(req, res, typeof next === "function" ? next : () => { });
-      } catch (e) {
-        console.error(`Failed to recover service ${route}:`, e);
-        if (res && !res.headersSent) {
-          res.writeHead(503, { "Content-Type": "text/html" });
-          res.end(`<h1>${route} is starting up. Try again shortly.</h1>`);
-        }
-      }
-    },
-  });
+  // Fire-and-forget; deduped inside the wake manager
+  triggerWake(route, svc.composeDir, svc.target);
 
-  app.use(`/proxy/${route}`, proxy);
+  const wantsHtml =
+    req.method === "GET" && String(req.headers.accept || "").includes("text/html");
+
+  if (wantsHtml) {
+    // Browser navigation: show the startup page immediately. It polls
+    // /__wake/status and reloads once the service is up.
+    if (res && !res.headersSent) {
+      res.writeHead(503, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Retry-After": "5",
+      });
+      res.end(renderWakePage(route, svc.wakePage ?? config.wakePage));
+    }
+    return;
+  }
+
+  // API/asset requests: wait for the service, then retry the proxy once
+  try {
+    await waitForHttpReady(svc.target, 60000);
+    createProxyMiddleware(proxyOptions(route, svc, false))(
+      req, res, typeof next === "function" ? next : () => { }
+    );
+  } catch (e) {
+    console.error(`Failed to recover service ${route}:`, e);
+    if (res && !res.headersSent) {
+      res.writeHead(503, { "Content-Type": "application/json", "Retry-After": "5" });
+      res.end(JSON.stringify({ error: `${route} is starting up. Try again shortly.` }));
+    }
+  }
+}
+
+Object.entries(SERVICES).forEach(([route, svc]) => {
+  app.use(`/proxy/${route}`, createProxyMiddleware(proxyOptions(route, svc, true)));
 });
 
 
@@ -106,82 +185,3 @@ app.listen(config.proxyPort || 8080, () => {
 
 // Start idle shutdown checker (interval: 5 min)
 startIdleShutdownChecker(SERVICES, config.idleThreshold);
-
-async function bringUpService(composeDir: string): Promise<string> {
-
-  return new Promise((resolve, reject) => {
-    const cmd = "docker compose up -d";
-
-    exec(cmd, { cwd: composeDir, env: process.env }, (err: Error | null, stdout: string, stderr: string) => {
-      if (!err) {
-        return resolve(stdout);
-      }
-
-      // Check if /bin/sh is available
-      if (!fs.existsSync("/bin/sh")) {
-        console.error("/bin/sh does not exist or is not accessible");
-      }
-
-      // Check if compose directory exists
-      if (!fs.existsSync(composeDir)) {
-        console.error(`Compose directory does not exist: ${composeDir}`);
-      } else {
-        // Check for compose file with various naming conventions
-        const composeFiles = [
-          "docker-compose.yml",
-          "docker-compose.yaml", 
-          "compose.yml",
-          "compose.yaml"
-        ];
-        const foundFile = composeFiles.find(f => fs.existsSync(path.join(composeDir, f)));
-        if (!foundFile) {
-          console.error(`Missing compose file in ${composeDir}. Expected one of: ${composeFiles.join(", ")}`);
-        }
-      }
-
-      console.error(stderr);
-
-      // Check for container name conflict
-      const match = stderr.match(/container name "(.+?)" is already in use/);
-      if (match) {
-        const containerName = match[1];
-        console.warn(`Container conflict detected: ${containerName}. Attempting to remove...`);
-
-        // Remove the conflicting container
-        exec(`docker rm -f ${containerName}`, { env: process.env }, (rmErr: Error | null, rmOut: string, rmStderr: string) => {
-          if (rmErr) {
-            console.error(`Failed to remove conflicting container: ${rmStderr}`);
-            return reject(rmErr);
-          }
-
-          console.log(`Removed ${containerName}. Retrying docker compose...`);
-
-          // Retry docker compose
-          exec(cmd, { cwd: composeDir, env: process.env }, (retryErr: Error | null, retryOut: string, retryStderr: string) => {
-            if (retryErr) {
-              console.error(`Retry failed: ${retryStderr}`);
-              return reject(retryErr);
-            }
-
-            resolve(retryOut);
-          });
-        });
-      } else {
-        reject(err);
-      }
-    });
-  });
-}
-
-// Wait for service to be reachable
-async function waitForHttpReady(url: string, timeoutMs: number = 30000, interval: number = 1000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await axios.get(url, { timeout: 2000 });
-      if (res.status >= 200 && res.status < 500) return;
-    } catch { }
-    await new Promise((r) => setTimeout(r, interval));
-  }
-  throw new Error(`Timeout: ${url} did not become ready`);
-}
