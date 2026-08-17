@@ -534,6 +534,23 @@ Automatically generates SSL-enabled NGINX configurations:
 - Proxy headers for proper forwarding
 - Buffering optimization
 
+**Keeping hand edits across regenerations:**
+
+Every generated conf contains a marker region inside the `location` block:
+
+```nginx
+# custom-start (lines between these markers survive regeneration)
+auth_basic "Restricted";
+auth_basic_user_file /etc/nginx/.htpasswd;
+# custom-end
+```
+
+Anything you put between the markers (basic auth, extra headers, rate limits,
+...) is carried over the next time the generator runs. To take a conf out of
+the generator's hands entirely, add a line containing `# wakeup:manual`
+anywhere in the file — it will never be overwritten. See
+[nginx-generator/confs/example.conf](nginx-generator/confs/example.conf).
+
 ### 3. Idle Shutdown (Integrated)
 
 Idle shutdown is now part of the wake-proxy service:

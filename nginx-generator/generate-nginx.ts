@@ -66,6 +66,22 @@ if (sitesEnabledExists) {
   }
 }
 
+// Markers that let users keep hand edits across regenerations:
+// - a file containing MANUAL_MARKER anywhere is never touched
+// - lines between CUSTOM_START and CUSTOM_END are carried over into the
+//   regenerated file (e.g. auth_basic, extra headers, rate limits)
+const MANUAL_MARKER = "# wakeup:manual";
+const CUSTOM_START = "# custom-start";
+const CUSTOM_END = "# custom-end";
+
+function extractCustomLines(conf: string): string[] {
+  const lines = conf.split("\n");
+  const start = lines.findIndex((l) => l.includes(CUSTOM_START));
+  const end = lines.findIndex((l) => l.includes(CUSTOM_END));
+  if (start === -1 || end === -1 || end <= start) return [];
+  return lines.slice(start + 1, end);
+}
+
 // Create NGINX config files for each service
 for (const svc of config.services) {
   // Raw TCP services (game servers etc.) are proxied directly by the wake
@@ -75,6 +91,22 @@ for (const svc of config.services) {
     continue;
   }
 
+  const outputPath = path.join(outputDir, `${svc.route}.conf`);
+
+  let customLines: string[] = [];
+  if (fs.existsSync(outputPath)) {
+    const existing = fs.readFileSync(outputPath, "utf8");
+    if (existing.includes(MANUAL_MARKER)) {
+      console.log(`Kept as-is (${MANUAL_MARKER}): ${outputPath}`);
+      continue;
+    }
+    customLines = extractCustomLines(existing);
+    if (customLines.length > 0) {
+      console.log(`Preserving ${customLines.length} custom line(s) in ${svc.route}.conf`);
+    }
+  }
+
+  const customBlock = customLines.length > 0 ? customLines.join("\n") + "\n" : "";
   const fullDomain = `${svc.route}.${domain}`;
   const nginxConf = `
 server {
@@ -82,6 +114,9 @@ server {
     server_name ${fullDomain};
 
     location / {
+        ${CUSTOM_START} (lines between these markers survive regeneration)
+${customBlock}        ${CUSTOM_END}
+
         proxy_pass http://127.0.0.1:${proxyPort}/proxy/${svc.route}/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -93,14 +128,21 @@ server {
     }
 }`.trim();
 
-  const outputPath = path.join(outputDir, `${svc.route}.conf`);
-  fs.writeFileSync(outputPath, nginxConf + "\n");
-  console.log(`Generated: ${outputPath}`);
+  try {
+    fs.writeFileSync(outputPath, nginxConf + "\n");
+    console.log(`Generated: ${outputPath}`);
+  } catch (e: any) {
+    console.error(
+      `Failed to write ${outputPath}: ${e?.message ?? e}\n` +
+      `  (If it's owned by root from an older version, fix with: sudo chown $USER ${outputPath})`
+    );
+  }
 }
 
 if (sitesEnabledExists) {
   // Safely create symlinks in /etc/nginx/sites-enabled
   fs.readdirSync(outputDir).forEach(file => {
+    if (file === "example.conf") return; // documentation only
     if (file.endsWith(".conf")) {
       const src = path.join(outputDir, file);
       const dest = path.join(targetDir, file);
