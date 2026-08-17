@@ -7,7 +7,7 @@ Requires=docker.service
 Type=simple
 User=replace-with-your-username
 Group=docker
-WorkingDirectory=/full/path/to/docker-wakeup/wake-proxy
+WorkingDirectory=/replace/with/path/to/DockerWakeUp/wake-proxy
 ExecStart=/usr/bin/node dist/wake-proxy.js
 Restart=always
 RestartSec=10
@@ -21,8 +21,8 @@ SyslogIdentifier=docker-wakeup
 # Security
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/tmp
+# Where the proxy stores last-access timestamps for idle shutdown
+ReadWritePaths=/replace/with/path/to/DockerWakeUp/wake-proxy/tmp
 
 [Install]
 WantedBy=multi-user.target

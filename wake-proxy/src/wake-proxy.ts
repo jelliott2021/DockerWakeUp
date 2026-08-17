@@ -11,6 +11,7 @@ import {
   waitForHttpReady,
 } from "./wakeManager";
 import { renderWakePage } from "./wakePage";
+import { startUpdateChecker, getUpdateInfo } from "./updateChecker";
 
 interface ServiceConfig {
   route: string;
@@ -25,6 +26,7 @@ interface Config {
   services: ServiceConfig[];
   idleThreshold: number;
   wakePage?: string; // default custom wake page for all services
+  updateCheck?: boolean; // set false to disable the daily update check
 }
 
 if (!fs.existsSync('/bin/sh')) {
@@ -52,6 +54,11 @@ config.services.forEach((svc) => {
 // Behind nginx, the browser requests /__wake/... which nginx rewrites to
 // /proxy/<route>/__wake/...; direct access uses the full path.
 // ---------------------------------------------------------------------------
+
+// Liveness probe (used by the docker-compose healthcheck)
+app.get("/healthz", (_req, res) => {
+  res.json({ ok: true, services: Object.keys(SERVICES).length, update: getUpdateInfo() });
+});
 
 // JSON readiness poll used by the wake page
 app.get("/proxy/:route/__wake/status", async (req, res) => {
@@ -185,3 +192,8 @@ app.listen(config.proxyPort || 8080, () => {
 
 // Start idle shutdown checker (interval: 5 min)
 startIdleShutdownChecker(SERVICES, config.idleThreshold);
+
+// Check for new DockerWakeUp versions on startup and daily
+if (config.updateCheck !== false) {
+  startUpdateChecker();
+}

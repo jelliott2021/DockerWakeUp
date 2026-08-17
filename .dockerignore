@@ -1,0 +1,8 @@
+**/node_modules
+**/dist
+wake-proxy/tmp
+nginx-generator
+.git
+*.md
+examples
+config.json

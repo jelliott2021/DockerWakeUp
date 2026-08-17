@@ -9,3 +9,4 @@ wake-proxy/tmp/
 nginx-generator/dist/
 nginx-generator/node_modules/
 config.json
+docker-wakeup.service

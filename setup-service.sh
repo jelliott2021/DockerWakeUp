@@ -99,6 +99,8 @@ SyslogIdentifier=docker-wakeup
 # Security
 NoNewPrivileges=true
 ProtectSystem=strict
+# Where the proxy stores last-access timestamps for idle shutdown
+ReadWritePaths=$WAKE_PROXY_DIR/tmp
 
 [Install]
 WantedBy=multi-user.target

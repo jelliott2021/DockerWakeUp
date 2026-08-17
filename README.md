@@ -62,13 +62,41 @@ This is especially useful for self-hosted environments where you want to conserv
 3. **Make sure SSL is setup**
   Instructions down below to setup wildcard SSL Certificate
 
-4. **Run the automated setup**
+4. **Run it** — pick one of two options:
+
+   **Option A: Docker (easiest)** — no Node.js needed on the host:
+   ```bash
+   docker compose up -d --build
+   ```
+   The container talks to the host's Docker daemon through the mounted socket
+   and uses host networking so `localhost` targets in `config.json` just work
+   (Linux only — not Docker Desktop). Your services' compose directories must
+   be visible inside the container at the same path as on the host; the
+   default mount of your home directory covers the common case — edit the
+   volumes in [docker-compose.yml](docker-compose.yml) if your stacks live
+   elsewhere (e.g. `/opt/stacks`).
+
+   You'll still need NGINX on the host for subdomain routing/SSL (see the
+   nginx-generator section below).
+
+   **Option B: SystemD via the automated setup script**:
    ```bash
    chmod +x setup-service.sh
    ./setup-service.sh
    ```
 
-5. **Idle shutdown is now built-in!**
+5. **Staying up to date**
+   - The wake-proxy checks GitHub once a day and logs a notice when your
+     local copy is behind (also visible at the `/healthz` endpoint). Disable
+     with `"updateCheck": false` in `config.json`.
+   - To update a Docker deployment:
+     ```bash
+     git pull && docker compose up -d --build
+     ```
+   - To update a SystemD deployment, `git pull` and re-run `./setup-service.sh`
+     (it offers the update automatically).
+
+6. **Idle shutdown is now built-in!**
    - No separate script or cron job needed.
    - The wake-proxy automatically monitors and stops idle containers every 5 minutes based on your `idleThreshold` in `config.json`.
 
@@ -260,8 +288,8 @@ If you prefer manual setup or need custom configuration:
    
    Copy the service template and customize:
    ```bash
-   # Copy the template
-   sudo cp docker-wakeup.service /etc/systemd/system/
+   # Copy the example template
+   sudo cp docker-wakeup.service.example /etc/systemd/system/docker-wakeup.service
    
    # Edit paths and username
    sudo nano /etc/systemd/system/docker-wakeup.service
@@ -353,6 +381,7 @@ Edit `config.json` to define your services:
 | `domain` | Your domain name for generating subdomains | `"example.com"` |
 | `services` | Array of service configurations | `[]` |
 | `wakePage` | Optional path to a custom "starting up" HTML page used for all services (relative to the project root) | built-in page |
+| `updateCheck` | Set to `false` to disable the daily check for new DockerWakeUp versions | `true` |
 
 ### Service Configuration
 
@@ -373,7 +402,8 @@ requests (APIs, assets) still wait for the service and are retried transparently
 
 To use your own page, set `wakePage` in `config.json` (globally or per-service) to
 an HTML file. `{{route}}` inside the file is replaced with the service's route
-name. Your page can use two same-origin endpoints:
+name. If you run DockerWakeUp with Docker, keep the page in `examples/` (mounted
+into the container) or use an absolute path under your home directory. Your page can use two same-origin endpoints:
 
 | Endpoint | Description |
 |----------|-------------|
@@ -543,7 +573,7 @@ docker-wakeup/
 ├── README.md                   # This file
 ├── LICENSE                     # MIT license
 ├── CONTRIBUTING.md             # Contribution guidelines
-├── docker-wakeup.service       # SystemD service template
+├── docker-wakeup.service.example  # SystemD service template
 ├── ecosystem.config.js         # PM2 configuration template
 ├── setup-service.sh            # Automated service setup script
 ├── wake-proxy/                 # Wake proxy service

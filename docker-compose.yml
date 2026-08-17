@@ -1,0 +1,48 @@
+services:
+  docker-wakeup:
+    build: .
+    container_name: docker-wakeup
+    restart: unless-stopped
+    # Host networking so the proxy can reach your services on localhost and
+    # nginx can reach the proxy. Requires Linux (not Docker Desktop).
+    network_mode: host
+    # Reap the `docker compose` child processes the proxy spawns
+    init: true
+    volumes:
+      # Control the host's Docker daemon
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Your service configuration
+      - ./config.json:/app/config.json:ro
+      # Lets the proxy compare your local commit against GitHub and log
+      # when an update is available (remove if you don't want that)
+      - ./.git:/app/.git:ro
+      # The directories containing your services' compose files must be
+      # visible INSIDE the container at the SAME path as on the host.
+      # Mounting your home directory covers the common case; add more
+      # mounts if your composeDirs live elsewhere (e.g. /opt/stacks).
+      # NOTE: run `docker compose` as your own user (in the docker group),
+      # not via sudo — sudo changes $HOME to /root and breaks this mount.
+      - ${HOME}:${HOME}:ro
+      # Makes relative wakePage paths like "examples/custom-wake-page.html"
+      # work; custom pages elsewhere also work via absolute paths under
+      # your home directory (mounted above)
+      - ./examples:/app/examples:ro
+      # Persist last-access timestamps so idle shutdown timers survive
+      # container rebuilds
+      - wakeup-tmp:/app/wake-proxy/tmp
+    healthcheck:
+      # Adjust the port if you changed proxyPort in config.json
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "10"
+    environment:
+      - NODE_ENV=production
+
+volumes:
+  wakeup-tmp:
