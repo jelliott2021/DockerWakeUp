@@ -4,6 +4,22 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-4.5+-blue.svg)](https://www.typescriptlang.org/)
 [![Docker](https://img.shields.io/badge/Docker-Compatible-blue.svg)](https://www.docker.com/)
 
+## What's New
+
+- **Live startup page** — streams the waking container's logs in the browser, with elapsed time and auto-reload when ready
+- **Progress estimate** — "usually ready in ~40s" bar based on the service's previous wake-ups
+- **Custom wake pages** — bring your own HTML via `wakePage`, per service or global
+- **TCP wake-on-connect** — game servers like Minecraft now wake when a player connects
+- **Start/stop hooks** — run your own commands before `docker compose up` and after `docker compose stop`
+- **Non-Docker services** — hooks can fully replace Docker Compose for a service
+- **Docker deployment** — run DockerWakeUp itself with one `docker compose up -d --build`
+- **Update notifications** — daily check that flags when your copy is behind GitHub
+- **Log privacy** — `showLogs: false` hides startup logs from public eyes
+- **Crash fix** — WebSocket reconnects to a sleeping service no longer kill the proxy
+- **Idle-shutdown fixes** — no more stopping services mid-wake or re-stopping sleeping ones
+
+Full details in the [CHANGELOG](CHANGELOG.md).
+
 ## Features 🚀
 
 - **On-Demand Container Startup**: Automatically starts Docker containers when they receive HTTP requests
@@ -30,6 +46,7 @@ This is especially useful for self-hosted environments where you want to conserv
 
 ## Table of Contents 📋
 
+- [What's New](#whats-new-)
 - [Features](#features-)
 - [Quick Start](#quick-start-)
 - [SSL Setup](#ssl-setup-)
