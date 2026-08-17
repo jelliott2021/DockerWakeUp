@@ -19,6 +19,22 @@
       "target": "http://localhost:2283",
       "composeDir": "/home/youruser/immich-app",
       "wakePage": "examples/custom-wake-page.html"
+    },
+    {
+      "route": "minecraft",
+      "type": "tcp",
+      "listenPort": 25566,
+      "target": "localhost:25565",
+      "composeDir": "/home/youruser/minecraft"
+    },
+    {
+      "route": "myapp",
+      "target": "http://localhost:3000",
+      "composeDir": "/home/youruser/myapp",
+      "showLogs": false,
+      "startCommand": "./prepare-mounts.sh",
+      "stopCommand": "./backup-data.sh",
+      "logsCommand": "tail -f logs/app.log"
     }
   ]
 }

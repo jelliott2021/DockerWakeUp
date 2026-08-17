@@ -231,7 +231,9 @@ generate_nginx_configs() {
     if [ -d "$SCRIPT_DIR/nginx-generator" ]; then
         echo -e "${BLUE}Generating NGINX configuration files...${NC}"
         cd "$SCRIPT_DIR/nginx-generator"
-        sudo npm run generate
+        # Run as the regular user — the generator uses sudo itself only for
+        # the symlink/reload steps, so conf files stay user-owned
+        npm run generate
         
         if [ $? -eq 0 ]; then
             echo -e "${GREEN}✅ NGINX configurations generated successfully!${NC}"

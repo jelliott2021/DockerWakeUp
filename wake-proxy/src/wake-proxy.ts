@@ -6,26 +6,35 @@ import { startIdleShutdownChecker } from "./idleShutdown";
 import {
   triggerWake,
   getWakeStatus,
-  streamComposeLogs,
-  isHttpReady,
-  waitForHttpReady,
+  getExpectedWakeMs,
+  streamServiceLogs,
+  isServiceReady,
+  waitForReady,
 } from "./wakeManager";
+import { startTcpProxy, TcpServiceConfig } from "./tcpProxy";
 import { renderWakePage } from "./wakePage";
 import { startUpdateChecker, getUpdateInfo } from "./updateChecker";
+import { touchLastAccess } from "./lastAccess";
 
 interface ServiceConfig {
   route: string;
   target: string;
-  composeDir: string;
+  composeDir?: string;
   autoOff?: boolean;
-  wakePage?: string; // optional custom "starting up" page (path to an HTML file)
+  type?: "http" | "tcp"; // default "http"; "tcp" proxies raw bytes (game servers etc.)
+  listenPort?: number;   // tcp only: port the TCP wake proxy listens on
+  wakePage?: string;     // optional custom "starting up" page (path to an HTML file)
+  showLogs?: boolean;    // set false to hide container logs from the wake page
+  startCommand?: string; // hook run BEFORE docker compose up -d (or the whole start if no composeDir)
+  stopCommand?: string;  // hook run AFTER docker compose stop (or the whole stop if no composeDir)
+  logsCommand?: string;  // custom startup-log command (default: docker compose logs -f)
 }
 
 interface Config {
   proxyPort: number;
   services: ServiceConfig[];
   idleThreshold: number;
-  wakePage?: string; // default custom wake page for all services
+  wakePage?: string;     // default custom wake page for all services
   updateCheck?: boolean; // set false to disable the daily update check
 }
 
@@ -36,16 +45,17 @@ if (!fs.existsSync('/bin/sh')) {
 const config: Config = JSON.parse(fs.readFileSync(path.join(__dirname, '../../config.json'), "utf8"));
 const app = express();
 
-// tmp folder inside the service's working directory
-const tmpDir = path.join(process.cwd(), "tmp");
-
-// create the tmp folder if it doesn't exist
-if (!fs.existsSync(tmpDir)) {
-  fs.mkdirSync(tmpDir, { recursive: true });
-}
+// A proxy fronting every service must not die because one request hit an
+// unexpected error path — log loudly instead of crashing
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled rejection in wake-proxy:", reason);
+});
 
 const SERVICES: Record<string, ServiceConfig> = {};
 config.services.forEach((svc) => {
+  if (!svc.composeDir && !svc.startCommand) {
+    console.warn(`Service ${svc.route}: no composeDir or startCommand configured — it cannot be woken`);
+  }
   SERVICES[svc.route] = svc;
 });
 
@@ -68,16 +78,19 @@ app.get("/proxy/:route/__wake/status", async (req, res) => {
     return;
   }
   const status = getWakeStatus(req.params.route);
-  const ready = await isHttpReady(svc.target);
+  const ready = await isServiceReady(svc);
   res.json({
     state: status.state,
     ready,
     startedAt: status.startedAt,
     error: status.error,
+    // For the "usually ready in ~Xs" progress estimate
+    expectedMs: getExpectedWakeMs(req.params.route),
+    elapsedMs: status.state === "starting" && status.startedAt ? Date.now() - status.startedAt : null,
   });
 });
 
-// Live docker compose logs streamed as Server-Sent Events
+// Live startup logs streamed as Server-Sent Events
 app.get("/proxy/:route/__wake/logs", (req, res) => {
   const svc = SERVICES[req.params.route];
   if (!svc) {
@@ -93,9 +106,14 @@ app.get("/proxy/:route/__wake/logs", (req, res) => {
   });
   res.write("retry: 3000\n\n");
 
-  const stopLogs = streamComposeLogs(svc.composeDir, (line) => {
-    res.write(`data: ${JSON.stringify(line)}\n\n`);
-  });
+  let stopLogs = () => { };
+  if (svc.showLogs === false) {
+    res.write(`data: ${JSON.stringify("[wake-proxy] log streaming is disabled for this service")}\n\n`);
+  } else {
+    stopLogs = streamServiceLogs(svc, (line) => {
+      res.write(`data: ${JSON.stringify(line)}\n\n`);
+    });
+  }
 
   // Keep intermediaries from closing an otherwise-quiet connection
   const ping = setInterval(() => res.write(": ping\n\n"), 15_000);
@@ -129,13 +147,7 @@ function proxyOptions(route: string, svc: ServiceConfig, withHandlers: boolean) 
     ...(withHandlers ? {
       onProxyRes: (proxyRes: any, req: any, res: any) => {
         if (proxyRes.statusCode && proxyRes.statusCode >= 200 && proxyRes.statusCode < 400) {
-          try {
-            // write the last access file inside tmp
-            const filePath = path.join(tmpDir, `last_access_${route}`);
-            fs.writeFileSync(filePath, Date.now().toString());
-          } catch (e) {
-            console.error(`Failed to write last access file for ${route}:`, e);
-          }
+          touchLastAccess(route);
         }
       },
       onError: (err: any, req: any, res: any, next: any) => handleProxyError(route, svc, req, res, next),
@@ -147,15 +159,26 @@ async function handleProxyError(route: string, svc: ServiceConfig, req: any, res
   console.warn(`Proxy to ${route} failed, waking service...`);
 
   // Fire-and-forget; deduped inside the wake manager
-  triggerWake(route, svc.composeDir, svc.target);
+  triggerWake(route, svc);
 
-  const wantsHtml =
-    req.method === "GET" && String(req.headers.accept || "").includes("text/html");
+  // Failed WebSocket upgrades hand us a raw socket, not a response object —
+  // treating it as a response crashes the process. Close it and let the
+  // client's reconnect logic retry once the service is awake.
+  if (!res || typeof res.writeHead !== "function") {
+    if (res && typeof res.destroy === "function") {
+      res.on("error", () => { });
+      res.destroy();
+    }
+    return;
+  }
+
+  const method = String(req.method || "").toUpperCase();
+  const wantsHtml = method === "GET" && String(req.headers.accept || "").includes("text/html");
 
   if (wantsHtml) {
     // Browser navigation: show the startup page immediately. It polls
     // /__wake/status and reloads once the service is up.
-    if (res && !res.headersSent) {
+    if (!res.headersSent) {
       res.writeHead(503, {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
@@ -166,15 +189,26 @@ async function handleProxyError(route: string, svc: ServiceConfig, req: any, res
     return;
   }
 
-  // API/asset requests: wait for the service, then retry the proxy once
+  // The failed proxy attempt already consumed the request stream, so a retry
+  // would replay non-idempotent requests with an empty body. Only wait-and-
+  // retry safe methods; everything else gets an immediate 503 + Retry-After.
+  if (method !== "GET" && method !== "HEAD") {
+    if (!res.headersSent) {
+      res.writeHead(503, { "Content-Type": "application/json", "Retry-After": "15" });
+      res.end(JSON.stringify({ error: `${route} is starting up. Retry shortly.` }));
+    }
+    return;
+  }
+
+  // Safe methods (API/asset GETs): wait for the service, then retry once
   try {
-    await waitForHttpReady(svc.target, 60000);
+    await waitForReady(svc, 60000);
     createProxyMiddleware(proxyOptions(route, svc, false))(
       req, res, typeof next === "function" ? next : () => { }
     );
   } catch (e) {
     console.error(`Failed to recover service ${route}:`, e);
-    if (res && !res.headersSent) {
+    if (!res.headersSent) {
       res.writeHead(503, { "Content-Type": "application/json", "Retry-After": "5" });
       res.end(JSON.stringify({ error: `${route} is starting up. Try again shortly.` }));
     }
@@ -182,12 +216,20 @@ async function handleProxyError(route: string, svc: ServiceConfig, req: any, res
 }
 
 Object.entries(SERVICES).forEach(([route, svc]) => {
+  if (svc.type === "tcp") {
+    if (!svc.listenPort) {
+      console.error(`Service ${route}: type "tcp" requires a listenPort — skipping`);
+      return;
+    }
+    startTcpProxy(svc as TcpServiceConfig);
+    return;
+  }
   app.use(`/proxy/${route}`, createProxyMiddleware(proxyOptions(route, svc, true)));
 });
 
 
 app.listen(config.proxyPort || 8080, () => {
-  console.log(`Wake proxy listening on port ${config.proxyPort}`);
+  console.log(`Wake proxy listening on port ${config.proxyPort || 8080}`);
 });
 
 // Start idle shutdown checker (interval: 5 min)

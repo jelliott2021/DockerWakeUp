@@ -10,7 +10,9 @@
 - **Intelligent Idle Management**: Monitors container usage and stops idle containers after configurable timeout
 - **Automatic NGINX Configuration**: Generates SSL-enabled NGINX reverse proxy configurations
 - **Zero-Downtime Experience**: Seamless proxying with startup loading pages
-- **Live Startup Page**: Browsers see a "starting server" page with live `docker compose` logs that auto-reloads when the service is ready — or bring your own custom HTML page
+- **Live Startup Page**: Browsers see a "starting server" page with live `docker compose` logs and a progress estimate that auto-reloads when the service is ready — or bring your own custom HTML page
+- **TCP Services**: Wake-on-connect for non-HTTP services like Minecraft and other game servers
+- **Start/Stop Hooks**: Run your own commands before a service starts and after it stops — or manage non-Docker services entirely with custom commands
 - **Resource Efficient**: Only runs containers when needed, saving CPU and memory
 - **Easy Configuration**: Single JSON file configuration for all services
 - **Automated Setup**: One-command installation with setup script
@@ -389,16 +391,86 @@ Edit `config.json` to define your services:
 |-------|-------------|---------|
 | `route` | Subdomain/route name | `"jellyfin"` |
 | `target` | Local URL where the service runs | `"http://localhost:8096"` |
-| `composeDir` | Directory containing docker-compose.yml | `"/path/to/service"` |
+| `composeDir` | Directory containing docker-compose.yml (optional if `startCommand` is set) | `"/path/to/service"` |
+| `type` | `"http"` (default) or `"tcp"` for raw TCP services like game servers | `"tcp"` |
+| `listenPort` | TCP services only: port the wake proxy listens on for clients | `25566` |
 | `wakePage` | Optional per-service custom "starting up" HTML page (overrides the global `wakePage`) | `"examples/custom-wake-page.html"` |
+| `showLogs` | Set `false` to hide container logs from the startup page | `true` |
+| `startCommand` | Hook run **before** `docker compose up -d` when waking (run in `composeDir`). Without a `composeDir`, it *is* the start command | `"./prepare.sh"` |
+| `stopCommand` | Hook run **after** `docker compose stop` on idle shutdown. Without a `composeDir`, it *is* the stop command | `"./backup.sh"` |
+| `logsCommand` | Custom command for the startup page's log stream (default: `docker compose logs -f`) | `"journalctl -fu myapp"` |
+
+`startCommand`, `stopCommand`, and `logsCommand` are run via `/bin/sh -c` with
+`composeDir` as the working directory, so any shell command line works — a
+script, a binary, a pipeline, an `&&` chain. They run as the wake-proxy's own
+user (no sudo). If you run DockerWakeUp with Docker, remember the command
+executes inside the (Alpine) container: `sh` is available but bash/python are
+not, and referenced files must be visible inside the container's mounts.
+
+Some examples of what hooks can do:
+
+```json
+"stopCommand": "tar czf backups/world-$(date +%F).tar.gz world/"
+```
+Back up a game world after the idle shutdown stops the server.
+
+```json
+"startCommand": "mount | grep -q /mnt/photos || mount /mnt/photos"
+```
+Make sure a network share is mounted before the containers come up.
+
+```json
+"startCommand": "curl -s -X POST -H 'Content-Type: application/json' -d '{\"content\": \"Jellyfin is waking up\"}' https://discord.com/api/webhooks/..."
+```
+Notify a Discord webhook when the service wakes (same idea works for `stopCommand`).
+
+```json
+"startCommand": "nohup node server.js >> app.log 2>&1 &",
+"stopCommand": "pkill -f 'node server.js'",
+"logsCommand": "tail -n 50 -f app.log"
+```
+Run a service that isn't managed by Docker at all — with no `composeDir`, the
+hooks *are* the start/stop, and the wake page tails the app's own log file.
+
+### TCP Services 🎮
+
+Services that don't speak HTTP (Minecraft and other game servers, databases,
+...) can't go through the HTTP proxy — set `"type": "tcp"` instead:
+
+```json
+{
+  "route": "minecraft",
+  "type": "tcp",
+  "listenPort": 25566,
+  "target": "localhost:25565",
+  "composeDir": "/home/youruser/minecraft"
+}
+```
+
+The wake proxy listens on `listenPort` and forwards raw bytes to `target`.
+When a client connects while the service is stopped, the proxy starts it,
+holds the connection until the target port opens (up to 90s), then connects
+through — so a Minecraft client's first join attempt wakes the server (clients
+that time out can simply retry). Point your port forwarding / DNS at
+`listenPort`, and note the service itself must bind a *different* port than
+`listenPort`. Idle shutdown works as usual: active connections keep the
+service marked as in-use. TCP services bypass NGINX entirely (the generator
+skips them).
 
 ### Startup Page 🕓
 
 When a browser hits a sleeping service, the wake proxy immediately responds with a
 startup page instead of leaving the request hanging. The default page shows a
 spinner, elapsed time, and the live `docker compose logs -f` output of the waking
-service, then reloads automatically once the service answers HTTP. Non-browser
-requests (APIs, assets) still wait for the service and are retried transparently.
+service, then reloads automatically once the service answers HTTP. Once a
+service has been woken before, the page also shows a progress bar with a
+"usually ready in ~40s" estimate based on its last 10 wake-ups. Non-browser
+GET requests (APIs, assets) wait for the service and are retried transparently;
+non-idempotent requests (POST etc.) get an immediate `503` with a `Retry-After`
+header, since their body can't be safely replayed.
+
+Anyone who can reach the service's URL can see the startup logs while it boots —
+set `"showLogs": false` on services whose logs shouldn't be public.
 
 To use your own page, set `wakePage` in `config.json` (globally or per-service) to
 an HTML file. `{{route}}` inside the file is replaced with the service's route
@@ -407,7 +479,7 @@ into the container) or use an absolute path under your home directory. Your page
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET __wake/status` | JSON: `{ state, ready, startedAt, error }` — `state` is `idle`/`starting`/`ready`/`failed`; reload the page when `ready` is `true` |
+| `GET __wake/status` | JSON: `{ state, ready, startedAt, error, expectedMs, elapsedMs }` — `state` is `idle`/`starting`/`ready`/`failed`; reload the page when `ready` is `true`; `expectedMs` is the typical wake duration (null until the first wake) |
 | `GET __wake/logs` | Server-Sent Events stream of `docker compose logs -f` (each event is one JSON-encoded log line) |
 
 See [examples/custom-wake-page.html](examples/custom-wake-page.html) for a

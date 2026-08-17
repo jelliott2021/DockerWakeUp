@@ -61,8 +61,23 @@ function renderDefaultWakePage(route: string): string {
   }
   @keyframes spin { to { transform: rotate(360deg); } }
   h1 { font-size: 1.35rem; margin: 0; font-weight: 600; }
-  .sub { color: #8b949e; font-size: 0.9rem; margin: 0 0 1.25rem 0; }
+  .sub { color: #8b949e; font-size: 0.9rem; margin: 0 0 1rem 0; }
   .sub .elapsed { color: #e6edf3; font-variant-numeric: tabular-nums; }
+  .progress {
+    display: none;
+    height: 6px;
+    background: #21262d;
+    border-radius: 3px;
+    overflow: hidden;
+    margin: 0 0 1.25rem 0;
+  }
+  .progress .bar {
+    height: 100%;
+    width: 0%;
+    background: #2f81f7;
+    border-radius: 3px;
+    transition: width 0.8s ease;
+  }
   .term {
     background: #010409;
     border: 1px solid #30363d;
@@ -95,7 +110,8 @@ function renderDefaultWakePage(route: string): string {
     <div class="spinner" id="spinner"></div>
     <h1>Starting <span id="svc">${safeRoute}</span></h1>
   </div>
-  <p class="sub" id="status-line">Waking up containers… <span class="elapsed" id="elapsed">0s</span></p>
+  <p class="sub" id="status-line">Waking up containers… <span class="elapsed" id="elapsed">0s</span><span id="eta"></span></p>
+  <div class="progress" id="progress"><div class="bar" id="bar"></div></div>
   <div class="term" id="log"><div class="line">Waiting for container logs…</div></div>
   <p class="error" id="error">Startup failed.<button onclick="location.reload()">Retry</button></p>
   <p class="footer">This page will refresh automatically once the service is ready.</p>
@@ -135,6 +151,11 @@ function renderDefaultWakePage(route: string): string {
   };
   es.onerror = function () { /* poller below handles reload/failure */ };
 
+  function fmtSecs(ms) {
+    var s = Math.max(1, Math.round(ms / 1000));
+    return s >= 60 ? Math.floor(s / 60) + "m " + (s % 60) + "s" : s + "s";
+  }
+
   // Poll readiness; reload the original URL once the service responds
   function poll() {
     fetch(base + "/status", { cache: "no-store" })
@@ -142,9 +163,18 @@ function renderDefaultWakePage(route: string): string {
       .then(function (st) {
         if (st.ready) {
           document.getElementById("status-line").textContent = "Ready! Loading…";
+          document.getElementById("bar").style.width = "100%";
           es.close();
           location.reload();
           return;
+        }
+        // Progress estimate from previous wake-ups of this service
+        if (st.expectedMs) {
+          var elapsedMs = st.elapsedMs != null ? st.elapsedMs : (Date.now() - start);
+          document.getElementById("eta").textContent = " · usually ready in ~" + fmtSecs(st.expectedMs);
+          document.getElementById("progress").style.display = "block";
+          document.getElementById("bar").style.width =
+            Math.min(95, Math.round(100 * elapsedMs / st.expectedMs)) + "%";
         }
         if (st.state === "failed") {
           document.getElementById("spinner").style.animationPlayState = "paused";
