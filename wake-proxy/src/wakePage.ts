@@ -27,9 +27,12 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// NOTE: String.raw is essential here — the page's inline JS is full of regex
+// escapes (\d, \[, \u001b, ...) that a normal template literal would mangle.
 function renderDefaultWakePage(route: string): string {
   const safeRoute = escapeHtml(route);
-  return `<!DOCTYPE html>
+  const routeJson = JSON.stringify(route);
+  return String.raw`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -87,12 +90,15 @@ function renderDefaultWakePage(route: string): string {
     overflow-y: auto;
     font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, Consolas, monospace;
     font-size: 0.78rem;
-    line-height: 1.5;
+    line-height: 1.55;
     white-space: pre-wrap;
-    word-break: break-all;
+    word-break: break-word;
   }
-  .term .line { color: #9da7b3; }
-  .term .line:last-child { color: #e6edf3; }
+  .term .line { color: #c9d1d9; }
+  .term .line.err { color: #ff7b72; }
+  .term .line.warn { color: #d29922; }
+  .term .dim { color: #6e7681; }
+  .term .svc { font-weight: 600; }
   .error { color: #f85149; margin-top: 1rem; display: none; }
   .error button {
     margin-left: 0.6rem;
@@ -112,13 +118,13 @@ function renderDefaultWakePage(route: string): string {
   </div>
   <p class="sub" id="status-line">Waking up containers… <span class="elapsed" id="elapsed">0s</span><span id="eta"></span></p>
   <div class="progress" id="progress"><div class="bar" id="bar"></div></div>
-  <div class="term" id="log"><div class="line">Waiting for container logs…</div></div>
+  <div class="term" id="log"><div class="line dim">Waiting for container logs…</div></div>
   <p class="error" id="error">Startup failed.<button onclick="location.reload()">Retry</button></p>
   <p class="footer">This page will refresh automatically once the service is ready.</p>
 </div>
 <script>
 (function () {
-  var route = ${JSON.stringify(route)};
+  var route = ${routeJson};
   // Direct access hits /proxy/<route>/…; behind nginx the subdomain root maps there already.
   var prefix = location.pathname.indexOf("/proxy/" + route) === 0 ? "/proxy/" + route : "";
   var base = prefix + "/__wake";
@@ -133,12 +139,78 @@ function renderDefaultWakePage(route: string): string {
       s >= 60 ? Math.floor(s / 60) + "m " + (s % 60) + "s" : s + "s";
   }, 1000);
 
-  function addLine(text) {
+  // Service-name prefix colors (like docker compose) and the ANSI palette
+  var PALETTE = ["#58a6ff", "#3fb950", "#d29922", "#bc8cff", "#39c5cf", "#ff9bce", "#7ee787", "#79c0ff"];
+  var ANSI = { 30:"#484f58",31:"#ff7b72",32:"#3fb950",33:"#d29922",34:"#58a6ff",35:"#bc8cff",36:"#39c5cf",37:"#b1bac4",
+               90:"#6e7681",91:"#ffa198",92:"#56d364",93:"#e3b341",94:"#79c0ff",95:"#d2a8ff",96:"#56d4dd",97:"#f0f6fc" };
+
+  function serviceColor(name) {
+    var h = 0;
+    for (var i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+    return PALETTE[h % PALETTE.length];
+  }
+
+  function span(parent, text, color, cls) {
+    if (!text) return;
+    var s = document.createElement("span");
+    s.textContent = text;
+    if (color) s.style.color = color;
+    if (cls) s.className = cls;
+    parent.appendChild(s);
+  }
+
+  // Render a message honoring ANSI SGR color codes (16-color set)
+  function renderMessage(parent, text) {
+    // Dim a leading ISO timestamp, if any
+    var ts = text.match(/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[\d.:Z+\-]*\s*/);
+    if (ts) { span(parent, ts[0], null, "dim"); text = text.slice(ts[0].length); }
+
+    var re = /\u001b\[([0-9;]*)m/g;
+    var idx = 0, m, color = null;
+    while ((m = re.exec(text)) !== null) {
+      span(parent, text.slice(idx, m.index), color);
+      var codes = m[1] === "" ? [0] : m[1].split(";").map(Number);
+      for (var i = 0; i < codes.length; i++) {
+        var c = codes[i];
+        if (c === 0 || c === 39) color = null;
+        else if (c === 38 || c === 48) { i += codes[i + 1] === 5 ? 2 : 4; } // skip 256/RGB colors
+        else if (ANSI[c]) color = ANSI[c];
+      }
+      idx = re.lastIndex;
+    }
+    span(parent, text.slice(idx), color);
+  }
+
+  function addLine(raw) {
+    // Strip escape sequences a browser can't render: OSC titles, cursor
+    // movement and erase codes — and keep only the final state of \r overwrites
+    var text = String(raw)
+      .replace(/\u001b\][^\u0007]*(\u0007|\u001b\\)/g, "")
+      .replace(/\u001b\[[0-9;?]*[A-Za-ln-z]/g, "")
+      .replace(/[\r\u0000-\u0008\u000b-\u001a]+$/g, "");
+    var cr = text.lastIndexOf("\r");
+    if (cr !== -1) text = text.slice(cr + 1);
+    if (!text.replace(/\u001b\[[0-9;]*m/g, "").trim()) return;
+
     if (firstLine) { logEl.innerHTML = ""; firstLine = false; }
     var atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 10;
     var div = document.createElement("div");
     div.className = "line";
-    div.textContent = text;
+
+    // docker compose prefixes lines with "service-name  | "
+    var pref = text.match(/^([\w.-]+)(\s+\|\s?)([\s\S]*)$/);
+    var msg = pref ? pref[3] : text;
+    // Tint whole line for plain (uncolored) error/warning output
+    if (!/\u001b\[/.test(msg)) {
+      if (/\b(error|fatal|exception|failed|panic)\b/i.test(msg)) div.className += " err";
+      else if (/\bwarn(ing)?\b/i.test(msg)) div.className += " warn";
+    }
+    if (pref) {
+      span(div, pref[1], serviceColor(pref[1]), "svc");
+      span(div, " | ", null, "dim");
+    }
+    renderMessage(div, msg);
+
     logEl.appendChild(div);
     while (logEl.childNodes.length > 500) logEl.removeChild(logEl.firstChild);
     if (atBottom) logEl.scrollTop = logEl.scrollHeight;
