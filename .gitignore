@@ -10,3 +10,8 @@ nginx-generator/dist/
 nginx-generator/node_modules/
 config.json
 docker-wakeup.service
+caddy-generator/Caddyfile
+caddy-generator/caddy-stack.yml
+docker-compose.override.yml
+caddy-generator/dist/
+caddy-generator/node_modules/

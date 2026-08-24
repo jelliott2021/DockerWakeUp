@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-08-23
+
+### Added
+
+- **Caddy / caddy-docker-proxy support** — new `caddy-generator/` reads the same
+  `config.json` and produces a `Caddyfile` (for plain Caddy, or as
+  caddy-docker-proxy's base Caddyfile via `CADDY_DOCKER_CADDYFILE_PATH`) plus a
+  `docker-compose.override.yml` that puts `caddy_N` labels on the docker-wakeup
+  container — Compose loads it automatically, so `docker compose up -d --build`
+  is all it takes for caddy-docker-proxy to pick the sites up. Run it with
+  `docker compose run --rm caddy-generator` (no Node.js on the host) or
+  `npm run generate`. Same `# custom-start`/`# custom-end` and `# wakeup:manual`
+  edit preservation as the NGINX generator. New optional `caddyUpstream` config
+  key (default `host.docker.internal:<proxyPort>`). `setup-service.sh` now asks
+  which reverse proxy to generate configs for; choosing Caddy prints the
+  remaining manual steps for your situation and, if you have no Caddy yet,
+  writes a ready-to-run caddy-docker-proxy stack to
+  `caddy-generator/caddy-stack.yml`. That stack runs Caddy with host networking
+  because ufw on a stock Ubuntu drops all bridge-network → host traffic (a
+  bridge Caddy gets 502s from the wake proxy); the README checklist and the
+  script print the exact ufw rule and a self-test for people who keep Caddy on
+  a bridge network. The example stack lives in `examples/caddy-docker-proxy.yml`.
+
 ## 2026-08-17
 
 ### Added

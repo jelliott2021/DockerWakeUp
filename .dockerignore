@@ -2,6 +2,7 @@
 **/dist
 wake-proxy/tmp
 nginx-generator
+caddy-generator
 .git
 *.md
 examples

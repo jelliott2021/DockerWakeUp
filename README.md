@@ -6,6 +6,7 @@
 
 ## What's New
 
+- **Caddy support** — generate a Caddyfile or caddy-docker-proxy labels instead of NGINX configs (see [Caddy / caddy-docker-proxy](#3-caddy-generator-caddy-generator))
 - **Live startup page** — streams the waking container's logs in the browser, with elapsed time and auto-reload when ready
 - **Progress estimate** — "usually ready in ~40s" bar based on the service's previous wake-ups
 - **Custom wake pages** — bring your own HTML via `wakePage`, per service or global
@@ -24,7 +25,7 @@ Full details in the [CHANGELOG](CHANGELOG.md).
 
 - **On-Demand Container Startup**: Automatically starts Docker containers when they receive HTTP requests
 - **Intelligent Idle Management**: Monitors container usage and stops idle containers after configurable timeout
-- **Automatic NGINX Configuration**: Generates SSL-enabled NGINX reverse proxy configurations
+- **Automatic Reverse Proxy Configuration**: Generates NGINX site configs, or a Caddyfile / caddy-docker-proxy labels if you prefer Caddy
 - **Zero-Downtime Experience**: Seamless proxying with startup loading pages
 - **Live Startup Page**: Browsers see a "starting server" page with live `docker compose` logs and a progress estimate that auto-reloads when the service is ready — or bring your own custom HTML page
 - **TCP Services**: Wake-on-connect for non-HTTP services like Minecraft and other game servers
@@ -56,6 +57,7 @@ This is especially useful for self-hosted environments where you want to conserv
 - [Architecture](#️-architecture)
 - [Configuration](#configuration-️)
 - [Components](#components-)
+- [Caddy / caddy-docker-proxy](#3-caddy-generator-caddy-generator)
 - [Usage](#usage-)
 - [Project Structure](#-project-structure)
 - [Requirements](#requirements-)
@@ -66,70 +68,77 @@ This is especially useful for self-hosted environments where you want to conserv
 
 ## Quick Start ⚡
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/jelliott2021/docker-wakeup.git
-   cd docker-wakeup
-   ```
+Before you start: point DNS at this server (an `A` record for `*.yourdomain.com`
+covers every service), and have Docker + Node.js installed.
 
-2. **Configure your services**
-   ```bash
-   cp config.json.example config.json # Copy example to config
-   nano config.json  # Edit with your service details
-   ```
+**1. Get the code and describe your services**
 
-3. **Make sure SSL is setup**
-  Instructions down below to setup wildcard SSL Certificate
+```bash
+git clone https://github.com/jelliott2021/docker-wakeup.git
+cd docker-wakeup
+cp config.json.example config.json
+nano config.json      # your domain + one entry per service (see Configuration below)
+```
 
-4. **Run it** — pick one of two options:
+**2. Run the setup script and pick option 1**
 
-   **Option A: Docker (easiest)** — no Node.js needed on the host:
-   ```bash
-   docker compose up -d --build
-   ```
-   The container talks to the host's Docker daemon through the mounted socket
-   and uses host networking so `localhost` targets in `config.json` just work
-   (Linux only — not Docker Desktop). Your services' compose directories must
-   be visible inside the container at the same path as on the host; the
-   default mount of your home directory covers the common case — edit the
-   volumes in [docker-compose.yml](docker-compose.yml) if your stacks live
-   elsewhere (e.g. `/opt/stacks`).
+```bash
+chmod +x setup-service.sh
+./setup-service.sh
+```
 
-   You'll still need NGINX on the host for subdomain routing/SSL (see the
-   nginx-generator section below).
+It builds everything, asks which reverse proxy you use, and installs and starts
+the `docker-wakeup` SystemD service (auto-starts on boot):
 
-   **Option B: SystemD via the automated setup script**:
-   ```bash
-   chmod +x setup-service.sh
-   ./setup-service.sh
-   ```
+- **NGINX** — the site configs are generated, linked into `sites-enabled` and
+  NGINX is reloaded. The only thing left is HTTPS: get the wildcard certificate
+  from [SSL Setup](#ssl-setup-) once.
+- **Caddy / caddy-docker-proxy** — it asks whether you already run Caddy and
+  prints the two or three things left to do for your case (or writes a
+  ready-to-run Caddy stack if you don't have one yet). Caddy handles HTTPS
+  itself — no certificates to manage.
 
-5. **Staying up to date**
-   - The wake-proxy checks GitHub once a day and logs a notice when your
-     local copy is behind (also visible at the `/healthz` endpoint). Disable
-     with `"updateCheck": false` in `config.json`.
-   - To update a Docker deployment:
-     ```bash
-     git pull && docker compose up -d --build
-     ```
-   - To update a SystemD deployment, `git pull` and re-run `./setup-service.sh`
-     (it offers the update automatically).
+**3. Use it**
 
-6. **Idle shutdown is now built-in!**
-   - No separate script or cron job needed.
-   - The wake-proxy automatically monitors and stops idle containers every 5 minutes based on your `idleThreshold` in `config.json`.
+Open `https://jellyfin.yourdomain.com`. If the service is stopped you see a
+startup page with its live logs; it reloads into the app as soon as it's ready.
+Services that nobody uses for `idleThreshold` seconds (3 days by default) are
+stopped again automatically — no cron job needed.
 
-The setup script will automatically:
-- Build all components (wake-proxy and nginx-generator)
-- Generate NGINX configurations from your config.json
-- Set up the wake-proxy as a SystemD service
-- Configure auto-start on boot
+**After the initial setup**
 
-That's it! Your wake-proxy service is now running with NGINX configs generated and ready to use.
+| Want to… | Do this |
+|---|---|
+| Add or change a service | edit `config.json`, then `./setup-service.sh` → option 4 (regenerates the proxy config) and `sudo systemctl restart docker-wakeup` |
+| Update DockerWakeUp | `git pull` then `./setup-service.sh` (it detects and offers the update itself) |
+| Watch the logs | `sudo journalctl -u docker-wakeup -f` |
+| Check it's alive | `curl localhost:8080/healthz` — also shows whether a newer version exists (checked daily; disable with `"updateCheck": false`) |
+
+**Alternative: run DockerWakeUp itself in Docker**
+
+No Node.js on the host needed. The container uses host networking (Linux only —
+not Docker Desktop) so `localhost` targets just work, and mounts your home
+directory so your services' compose directories are visible at the same path —
+edit the volumes in [docker-compose.yml](docker-compose.yml) if your stacks live
+elsewhere (e.g. `/opt/stacks`).
+
+```bash
+docker compose run --rm caddy-generator   # only if you use caddy-docker-proxy — writes the labels override
+docker compose up -d --build
+```
+
+You still need the reverse proxy in front of it: NGINX on the host (generate its
+configs with `cd nginx-generator && npm install && npm run generate`, which does
+need Node.js) or caddy-docker-proxy (the command above is all it takes — see the
+[Caddy section](#3-caddy-generator-caddy-generator)). Update with
+`git pull && docker compose up -d --build`.
 
 ## SSL Setup 🔒
 
-For HTTPS access, set up a wildcard SSL certificate to cover all subdomains:
+> Using Caddy? Skip this section — Caddy obtains and renews certificates by
+> itself (see [Caddy / caddy-docker-proxy](#3-caddy-generator-caddy-generator)).
+
+For HTTPS access with NGINX, set up a wildcard SSL certificate to cover all subdomains:
 
 ### Quick SSL Setup
 
@@ -186,9 +195,9 @@ chmod +x setup-service.sh
 ### What the Setup Script Does
 
 **Automated Installation Process:**
-1. ✅ **Dependency Installation** - Installs all npm packages for both components
-2. ✅ **TypeScript Compilation** - Builds the wake-proxy and nginx-generator
-3. ✅ **NGINX Configuration Generation** - Creates SSL-enabled NGINX configs from your config.json
+1. ✅ **Dependency Installation** - Installs all npm packages for all components
+2. ✅ **TypeScript Compilation** - Builds the wake-proxy, nginx-generator and caddy-generator
+3. ✅ **Reverse Proxy Configuration Generation** - Creates NGINX configs or Caddy / caddy-docker-proxy configs from your config.json (you pick which)
 4. ✅ **SystemD Service Creation** - Generates service file with correct paths
 5. ✅ **User & Path Detection** - Automatically configures service for your system
 6. ✅ **Security Hardening** - Applies production security settings
@@ -200,12 +209,19 @@ chmod +x setup-service.sh
 The script provides several installation methods:
 
 ```
-1) SystemD service + NGINX configs (recommended for production)
-2) PM2 process manager + NGINX configs
+1) SystemD service + reverse proxy configs (recommended for production)
+2) PM2 process manager + reverse proxy configs
 3) Build project only (no service setup)
-4) Generate NGINX configs only
+4) Generate reverse proxy configs only (NGINX or Caddy)
 5) Exit
 ```
+
+Options 1, 2 and 4 then ask which reverse proxy you use — NGINX (default),
+Caddy / caddy-docker-proxy, or none — and generate the matching configs.
+Choosing Caddy asks one more question (do you already have Caddy running?) and
+prints the short list of things left to do for your case; if you don't have
+Caddy yet it also writes a ready-to-run caddy-docker-proxy stack to
+`caddy-generator/caddy-stack.yml` with the generated Caddyfile already mounted.
 
 **SystemD + NGINX Features:**
 - 🔄 **Auto-restart** on failure or crash
@@ -251,7 +267,7 @@ sudo systemctl start docker-wakeup
 - Production deployments  
 - Quick testing and demos
 - Team onboarding
-- Homelab setups requiring NGINX reverse proxy
+- Homelab setups requiring an NGINX or Caddy reverse proxy
 
 ## Manual Installation 📦
 
@@ -261,7 +277,7 @@ If you prefer manual setup or need custom configuration:
 
 - Docker and Docker Compose
 - Node.js 16+ and npm
-- NGINX (for production)
+- NGINX or Caddy / caddy-docker-proxy (for production)
 - jq (for JSON parsing in bash scripts)
 - SSL certificates (Let's Encrypt recommended)
 
@@ -280,6 +296,9 @@ If you prefer manual setup or need custom configuration:
    
    # NGINX generator dependencies
    cd nginx-generator && npm install && cd ..
+
+   # Caddy generator dependencies (only if you use Caddy)
+   cd caddy-generator && npm install && cd ..
    ```
 
 3. **Configure your services**
@@ -289,12 +308,21 @@ If you prefer manual setup or need custom configuration:
    nano config.json
    ```
 
-4. **Generate NGINX configurations**
+4. **Generate reverse proxy configurations**
+
+   NGINX:
    ```bash
    cd nginx-generator
    npm run generate
    sudo nginx -t  # Test configuration
    sudo systemctl reload nginx
+   cd ..
+   ```
+
+   Caddy / caddy-docker-proxy (see the [caddy-generator section](#3-caddy-generator-caddy-generator) for how to use the output):
+   ```bash
+   cd caddy-generator
+   npm run generate
    cd ..
    ```
 
@@ -351,7 +379,7 @@ sudo systemctl is-active docker-wakeup                 # Check if running
 
 ```
 ┌─────────────────┐    ┌──────────────┐    ┌─────────────────┐
-│   NGINX Proxy   │───▶│  Wake Proxy  │───▶│ Docker Services │
+│  NGINX / Caddy  │───▶│  Wake Proxy  │───▶│ Docker Services │
 │  (Port 80/443)  │    │  (Port 8080) │    │   (Various)     │
 └─────────────────┘    └──────────────┘    └─────────────────┘
          │                       │                    │
@@ -364,7 +392,7 @@ sudo systemctl is-active docker-wakeup                 # Check if running
 ```
 
 The system works in three layers:
-1. **NGINX** handles SSL termination and routes requests to the wake proxy
+1. **NGINX or Caddy** handles SSL termination and routes requests to the wake proxy
 2. **Wake Proxy** manages container lifecycle, proxies requests, and now also monitors/stops unused containers (idle shutdown is integrated)
 
 ## Configuration ⚙️
@@ -401,6 +429,7 @@ Edit `config.json` to define your services:
 | `services` | Array of service configurations | `[]` |
 | `wakePage` | Optional path to a custom "starting up" HTML page used for all services (relative to the project root) | built-in page |
 | `updateCheck` | Set to `false` to disable the daily check for new DockerWakeUp versions | `true` |
+| `caddyUpstream` | Caddy only: address Caddy uses to reach the wake proxy. Use `127.0.0.1:8080` when Caddy runs directly on the host | `host.docker.internal:<proxyPort>` |
 
 ### Service Configuration
 
@@ -471,8 +500,8 @@ through — so a Minecraft client's first join attempt wakes the server (clients
 that time out can simply retry). Point your port forwarding / DNS at
 `listenPort`, and note the service itself must bind a *different* port than
 `listenPort`. Idle shutdown works as usual: active connections keep the
-service marked as in-use. TCP services bypass NGINX entirely (the generator
-skips them).
+service marked as in-use. TCP services bypass NGINX/Caddy entirely (both
+generators skip them).
 
 ### Startup Page 🕓
 
@@ -501,7 +530,7 @@ into the container) or use an absolute path under your home directory. Your page
 
 See [examples/custom-wake-page.html](examples/custom-wake-page.html) for a
 minimal working example, including the URL-prefix handling needed to work both
-behind NGINX and when accessing the wake proxy directly.
+behind NGINX/Caddy and when accessing the wake proxy directly.
 
 ## Components 🧩
 
@@ -551,7 +580,156 @@ the generator's hands entirely, add a line containing `# wakeup:manual`
 anywhere in the file — it will never be overwritten. See
 [nginx-generator/confs/example.conf](nginx-generator/confs/example.conf).
 
-### 3. Idle Shutdown (Integrated)
+### 3. Caddy Generator (`caddy-generator/`)
+
+Prefer Caddy — or already run [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy)
+for your other containers? `caddy-generator` is the Caddy counterpart of the
+NGINX generator. It reads the same `config.json` and writes two files:
+
+| File | Use it when |
+|------|-------------|
+| `docker-compose.override.yml` (repo root) | DockerWakeUp runs with Docker and Caddy is caddy-docker-proxy — a compose override that puts `caddy_N` labels on the `docker-wakeup` container. Docker Compose loads it automatically, so a plain `docker compose up -d --build` includes the labels |
+| `caddy-generator/Caddyfile` | DockerWakeUp runs via SystemD/PM2 (hand it to caddy-docker-proxy as its base Caddyfile via `CADDY_DOCKER_CADDYFILE_PATH`), or you run plain Caddy on the host (`import` it) |
+
+Generate them whichever way suits you:
+
+```bash
+docker compose run --rm caddy-generator          # no Node.js on the host needed
+# or, with Node.js installed:
+cd caddy-generator && npm install && npm run generate && cd ..
+# or pick "Caddy" when ./setup-service.sh asks
+```
+
+Each HTTP service becomes one site, `jellyfin.yourdomain.com` → `/proxy/jellyfin/…`
+on the wake proxy, exactly like the NGINX configs (TCP services are skipped).
+Nothing is installed or reloaded for you — unlike NGINX, Caddy picks the config
+up itself.
+
+#### Starting from scratch (no Caddy yet)
+
+Nothing in DockerWakeUp starts a Caddy for you, so bring one up first. The
+example stack is a complete caddy-docker-proxy already wired for DockerWakeUp
+(ports 80/443 must be free — i.e. no NGINX on them):
+
+```bash
+mkdir ~/caddy && cp examples/caddy-docker-proxy.yml ~/caddy/docker-compose.yml
+docker network create caddy
+(cd ~/caddy && docker compose up -d)
+
+cp config.json.example config.json        # domain + services
+docker compose run --rm caddy-generator
+docker compose up -d --build
+```
+
+That's it: caddy-docker-proxy notices the labelled `docker-wakeup` container,
+adds one site per service and issues certificates for the new subdomains (DNS
+for them must point at the server — a wildcard `A *` record is enough). Later
+containers you want Caddy to serve just get `caddy.*` labels of their own on the
+`caddy` network, as in the caddy-docker-proxy docs.
+
+The stack runs Caddy with **host networking** on purpose: it binds 80/443
+directly and talks to the wake proxy over loopback, so there is nothing to open
+in the firewall — a Caddy on a bridge network is blocked by ufw on a stock
+Ubuntu (see step 1 of the checklist below). It still reaches labelled containers
+over the `caddy` network.
+
+Running DockerWakeUp via SystemD/PM2 instead of Docker? Run `setup-service.sh`,
+choose "Caddy" and answer "no" to "already have Caddy?" — it writes the same
+stack with the generated Caddyfile already mounted to
+`caddy-generator/caddy-stack.yml` and prints the three commands to start it
+(see B) below for what that does).
+
+#### Already running caddy-docker-proxy? The checklist
+
+Your Caddy container, its network, certificates and every other labelled
+container stay exactly as they are. Four things change:
+
+1. **Let Caddy reach the wake proxy.** The wake proxy listens on the *host*
+   (`proxyPort`, 8080 by default), not on the `caddy` network, and the generated
+   config points Caddy at `host.docker.internal:8080`. Add this to your existing
+   caddy service and recreate it (`docker compose up -d`):
+   ```yaml
+   extra_hosts:
+     - "host.docker.internal:host-gateway"
+   ```
+   **Firewall — not optional on Ubuntu with ufw.** A container on a bridge
+   network cannot reach *any* host port through ufw: requests time out and Caddy
+   answers 502. Allow the wake proxy port from your Caddy network (subnet from
+   `docker network inspect caddy`):
+   ```bash
+   sudo ufw allow from 172.27.0.0/16 to any port 8080 proto tcp
+   ```
+   Self-test — prints JSON once Caddy will be able to reach the wake proxy:
+   ```bash
+   docker run --rm --network caddy --add-host host.docker.internal:host-gateway alpine wget -qO- http://host.docker.internal:8080/healthz
+   ```
+   No firewall rule is needed if Caddy runs with `network_mode: host` — then map
+   `host.docker.internal` to loopback instead
+   (`extra_hosts: ["host.docker.internal:127.0.0.1"]`), which is what
+   [examples/caddy-docker-proxy.yml](examples/caddy-docker-proxy.yml) does. Plain
+   Caddy on the host: set `"caddyUpstream": "127.0.0.1:8080"` in `config.json`.
+
+2. **Remove the `caddy.*` labels from every service you hand over to
+   DockerWakeUp.** If `jellyfin` keeps `caddy: jellyfin.example.com` /
+   `caddy.reverse_proxy: {{upstreams 8096}}`, caddy-docker-proxy merges that with
+   DockerWakeUp's block for the same hostname and the site ends up with two
+   `reverse_proxy` directives. And once idle shutdown stops the container, its
+   labels disappear with it — exactly when the wake-up should happen.
+   DockerWakeUp's labels must be the *only* route for those hostnames.
+
+3. **Publish each managed service's port on the host.** caddy-docker-proxy
+   setups usually publish no ports at all — Caddy reaches containers over the
+   shared network. The wake proxy reaches them via `target`
+   (`http://localhost:8096`), so add a `ports:` mapping to each managed service.
+   Binding to loopback keeps it private:
+   ```yaml
+   ports:
+     - "127.0.0.1:8096:8096"
+   ```
+
+4. **Configure, generate, start:**
+   ```bash
+   cp config.json.example config.json   # domain + services; targets are the localhost ports from step 3
+   docker compose run --rm caddy-generator
+   docker compose up -d --build
+   ```
+   caddy-docker-proxy notices the labelled `docker-wakeup` container and adds one
+   site per service; Caddy issues certificates for the new subdomains as usual
+   (their DNS must already point at the server — a wildcard record covers it).
+
+After changing `config.json`, re-run the generator and `docker compose up -d`
+(labels only change when the container is recreated). Already have a
+`docker-compose.override.yml` of your own? The generator leaves it untouched
+and prints the labels for you to merge.
+
+**B) caddy-docker-proxy + SystemD/PM2 deployment (base Caddyfile)**
+
+There is no DockerWakeUp container to label, so mount the generated Caddyfile
+into the caddy-docker-proxy container and point `CADDY_DOCKER_CADDYFILE_PATH`
+at it (both lines are in the example stack, commented out). caddy-docker-proxy
+re-reads the file every time it regenerates its config (on Docker events and
+every 30s by default), so `npm run generate` is all you need after changes.
+Steps 1–3 of the checklist apply here too (with `caddyUpstream` per step 1).
+
+**C) Plain Caddy on the host**
+
+Add `import /path/to/DockerWakeUp/caddy-generator/Caddyfile` to
+`/etc/caddy/Caddyfile`, set `"caddyUpstream": "127.0.0.1:8080"`, and
+`sudo systemctl reload caddy` after each regeneration.
+
+**TLS:** Caddy obtains a certificate per subdomain automatically (ports 80/443
+must be reachable from the internet), so the wildcard certificate from the SSL
+Setup section is not needed. A wildcard needs a Caddy build with your DNS
+provider's module — see the Caddy docs.
+
+**Keeping hand edits:** the same `# custom-start` / `# custom-end` markers and
+`# wakeup:manual` escape hatch as the NGINX generator apply — every site block in
+the Caddyfile has its own marker pair (for `basic_auth`, extra headers, ...),
+and `docker-compose.override.yml` has one region inside `labels:` (label indices
+`caddy_0`, `caddy_1`, … follow the order of services in `config.json`). See
+[caddy-generator/Caddyfile.example](caddy-generator/Caddyfile.example).
+
+### 4. Idle Shutdown (Integrated)
 
 Idle shutdown is now part of the wake-proxy service:
 - Monitors last access times for each service
@@ -680,6 +858,8 @@ docker-wakeup/
 ├── LICENSE                     # MIT license
 ├── CONTRIBUTING.md             # Contribution guidelines
 ├── docker-wakeup.service.example  # SystemD service template
+├── docker-compose.yml          # Run DockerWakeUp with Docker (+ caddy-generator one-shot)
+├── docker-compose.override.yml # Generated by caddy-generator: caddy-docker-proxy labels
 ├── ecosystem.config.js         # PM2 configuration template
 ├── setup-service.sh            # Automated service setup script
 ├── wake-proxy/                 # Wake proxy service
@@ -688,14 +868,21 @@ docker-wakeup/
 │   ├── package.json           # Dependencies
 │   ├── tsconfig.json          # TypeScript config
 │   └── dist/                  # Compiled JavaScript
-└─ nginx-generator/            # NGINX config generator
-    ├── generate-nginx.ts      # Generator script
-    ├── package.json           # Dependencies
-    ├── tsconfig.json          # TypeScript config
-    └── confs/                 # Generated configs
-        ├── jellyfin.conf
-        ├── portainer.conf
-        └── ...
+├── nginx-generator/            # NGINX config generator
+│   ├── generate-nginx.ts      # Generator script
+│   ├── package.json           # Dependencies
+│   ├── tsconfig.json          # TypeScript config
+│   └── confs/                 # Generated configs
+│       ├── jellyfin.conf
+│       ├── portainer.conf
+│       └── ...
+├── caddy-generator/            # Caddy / caddy-docker-proxy config generator
+│   ├── generate-caddy.ts      # Generator script
+│   ├── Caddyfile.example      # What the output looks like
+│   └── Caddyfile              # Generated (plain Caddy / CDP base Caddyfile)
+└── examples/
+    ├── custom-wake-page.html  # Custom startup page example
+    └── caddy-docker-proxy.yml # caddy-docker-proxy stack fronting DockerWakeUp
 ```
 
 ## Requirements 🔧
@@ -710,7 +897,7 @@ docker-wakeup/
 - **Docker**: 20.10+
 - **Docker Compose**: 2.0+
 - **Node.js**: 16.0+
-- **NGINX**: 1.18+
+- **NGINX**: 1.18+ — or **Caddy** 2.x / caddy-docker-proxy
 - **jq**: 1.6+ (for JSON parsing)
 
 ### Optional Dependencies
