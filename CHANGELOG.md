@@ -36,6 +36,16 @@
 - `CONFIGURATION.md` — complete `config.json` reference (every option, defaults,
   hook recipes, TCP services, custom wake pages).
 
+### Security
+
+- `__wake/logs` now only streams while a wake is in progress (or has just
+  failed, so startup errors stay diagnosable). Previously it was an
+  always-open live tap into any service's logs for anyone who could reach the
+  service's URL.
+- **`showLogs` now defaults to `false`** — startup-log streaming on the wake
+  page is opt-in per service (`"showLogs": true`), so sensitive boot logs
+  can't be exposed by accident.
+
 ### Changed
 
 - **`proxy-generator/` replaces `nginx-generator/`** — one package generates

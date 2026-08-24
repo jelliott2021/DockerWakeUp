@@ -86,7 +86,7 @@ loaded.
 | `listenPort` | number | — | **TCP only, required**: port the wake proxy listens on for clients. Point port forwarding/DNS here; must differ from the service's own port in `target`. |
 | `autoOff` | boolean | `true` | Set `false` to exempt this service from idle shutdown (it still wakes on demand, it just never gets stopped). |
 | `wakePage` | string (path) | global `wakePage` | Per-service startup page, overrides the global one. |
-| `showLogs` | boolean | `true` | Set `false` to hide the container logs from the startup page — anyone who can reach the URL can see them while the service boots. |
+| `showLogs` | boolean | `false` | **Opt-in**: set `true` to stream the container's logs on the startup page while it wakes. Off by default because anyone who can reach the URL can read the stream, and boot logs often contain config details. (Streaming is only ever possible during a wake — running and sleeping services never stream logs.) |
 | `startCommand` | string | — | Hook run **before** `docker compose up -d` when waking. Without a `composeDir` it *is* the start command (non-Docker services). |
 | `stopCommand` | string | — | Hook run **after** `docker compose stop` on idle shutdown. Without a `composeDir` it *is* the stop command. |
 | `logsCommand` | string | — | Custom command for the startup page's log stream (default: `docker compose logs -f`). |
@@ -151,7 +151,7 @@ both at the root of each service's hostname and under `/proxy/<route>/`:
 | Endpoint | Description |
 |----------|-------------|
 | `GET __wake/status` | JSON: `{ state, ready, startedAt, error, expectedMs, elapsedMs }` — `state` is `idle`/`starting`/`ready`/`failed`; reload when `ready` is `true`; `expectedMs` is the typical wake duration (null until the first wake) |
-| `GET __wake/logs` | Server-Sent Events stream of `docker compose logs -f` (each event one JSON-encoded log line) |
+| `GET __wake/logs` | Server-Sent Events stream of `docker compose logs -f` (each event one JSON-encoded log line). Only streams while a wake is in progress or has just failed — for running or sleeping services it sends a single notice instead |
 
 Docker deployments: keep custom pages in `examples/` (mounted into the
 container) or use an absolute path under your home directory.

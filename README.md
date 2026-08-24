@@ -386,11 +386,13 @@ through. TCP services bypass NGINX/Caddy entirely. Details in
 
 ### Startup Page 🕓
 
-Browsers hitting a sleeping service instantly get a startup page with live
-`docker compose` logs, a progress estimate, and an auto-reload when the service
-is ready — or bring your own HTML via `wakePage`
-([example](examples/custom-wake-page.html)). Set `"showLogs": false` on
-services whose boot logs shouldn't be public. Endpoints and details in
+Browsers hitting a sleeping service instantly get a startup page with a
+spinner, a progress estimate, and an auto-reload when the service is ready —
+or bring your own HTML via `wakePage`
+([example](examples/custom-wake-page.html)). Live `docker compose` logs on the
+page are **opt-in** (`"showLogs": true` per service) since anyone who can reach
+the URL could read them, and they only ever stream while the service is
+actually waking. Endpoints and details in
 [CONFIGURATION.md](CONFIGURATION.md#custom-wake-pages).
 
 ## Components 🧩

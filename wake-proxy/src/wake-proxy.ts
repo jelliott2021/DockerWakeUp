@@ -24,7 +24,7 @@ interface ServiceConfig {
   type?: "http" | "tcp"; // default "http"; "tcp" proxies raw bytes (game servers etc.)
   listenPort?: number;   // tcp only: port the TCP wake proxy listens on
   wakePage?: string;     // optional custom "starting up" page (path to an HTML file)
-  showLogs?: boolean;    // set false to hide container logs from the wake page
+  showLogs?: boolean;    // opt-in: set true to stream container logs on the wake page
   startCommand?: string; // hook run BEFORE docker compose up -d (or the whole start if no composeDir)
   stopCommand?: string;  // hook run AFTER docker compose stop (or the whole stop if no composeDir)
   logsCommand?: string;  // custom startup-log command (default: docker compose logs -f)
@@ -129,9 +129,18 @@ function wakeLogsHandler(svc: ServiceConfig, req: express.Request, res: express.
   });
   res.write("retry: 3000\n\n");
 
+  // Logs exist for the startup page only. Streaming is limited to an active
+  // (or just-failed) wake — otherwise this endpoint would be a public live
+  // tap into any running service's logs, and `--tail` would expose the
+  // previous run's logs for sleeping ones.
+  const state = getWakeStatus(svc.route).state;
   let stopLogs = () => { };
-  if (svc.showLogs === false) {
-    res.write(`data: ${JSON.stringify("[wake-proxy] log streaming is disabled for this service")}\n\n`);
+  if (svc.showLogs !== true) {
+    // Off by default: startup logs often contain config/connection details,
+    // and anyone who can reach the URL can read this stream during a wake.
+    res.write(`data: ${JSON.stringify('[wake-proxy] log streaming is disabled for this service (set "showLogs": true in config.json to enable)')}\n\n`);
+  } else if (state !== "starting" && state !== "failed") {
+    res.write(`data: ${JSON.stringify("[wake-proxy] log streaming is only available while the service is starting")}\n\n`);
   } else {
     stopLogs = streamServiceLogs(svc, (line) => {
       res.write(`data: ${JSON.stringify(line)}\n\n`);
