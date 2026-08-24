@@ -1,0 +1,45 @@
+# Example Traefik stack that fronts DockerWakeUp.
+#
+# Traefik runs with HOST networking on purpose: the wake proxy listens on the
+# host (proxyPort in config.json, 8080 by default), and on a stock Ubuntu with
+# ufw enabled a container on a bridge network can NOT reach host ports (see
+# the README's "Works With Any Reverse Proxy" section). With host networking
+# Traefik binds 80/443 directly and reaches the wake proxy on 127.0.0.1 — the
+# extra_hosts line maps host.docker.internal (the generator's default
+# upstream) to loopback so the generated file works unchanged.
+#
+# Before starting:
+#   1. Generate the dynamic config:  ./setup-service.sh (choose Traefik)
+#      or: cd proxy-generator && npm run traefik
+#   2. Fix the volume path below and set your ACME email.
+#
+# TLS: the websecure entrypoint enables TLS with the letsencrypt resolver for
+# every router, so the generated file needs no per-router tls config.
+# Certificates are issued per subdomain via the HTTP challenge — DNS for the
+# subdomains must point at this server and ports 80/443 must be reachable.
+
+services:
+  traefik:
+    image: traefik:v3.1
+    container_name: traefik
+    restart: unless-stopped
+    network_mode: host   # binds 80/443 on the host directly — no `ports:` needed
+    extra_hosts:
+      - "host.docker.internal:127.0.0.1"
+    command:
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.websecure.http.tls.certresolver=letsencrypt
+      - --providers.file.filename=/etc/traefik/docker-wakeup.yml
+      - --providers.file.watch=true
+      - --certificatesresolvers.letsencrypt.acme.email=you@example.com   # CHANGE ME
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    volumes:
+      - /path/to/DockerWakeUp/proxy-generator/traefik-dynamic.yml:/etc/traefik/docker-wakeup.yml:ro
+      - traefik-letsencrypt:/letsencrypt
+
+volumes:
+  traefik-letsencrypt: {}

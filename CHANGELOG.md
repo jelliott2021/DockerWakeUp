@@ -1,27 +1,53 @@
 # Changelog
 
-## 2026-08-23
+## 2026-08-24
 
 ### Added
 
-- **Caddy / caddy-docker-proxy support** — new `caddy-generator/` reads the same
-  `config.json` and produces a `Caddyfile` (for plain Caddy, or as
-  caddy-docker-proxy's base Caddyfile via `CADDY_DOCKER_CADDYFILE_PATH`) plus a
+- **Host-based routing — works with any reverse proxy.** The wake proxy now
+  resolves services from the request's hostname (`<route>.<domain>`, per-service
+  `domains` aliases, or a first-label match), so the proxy in front only has to
+  forward requests with the Host header intact: NGINX, Caddy, Traefik, a
+  Cloudflare Tunnel, anything. No more `/proxy/<route>` path rewrites — though
+  the old prefixed form still works, so existing configs don't break. The
+  `__wake/status` and `__wake/logs` endpoints are also available at the root of
+  each service's hostname.
+- **Caddy / caddy-docker-proxy support.** The generator produces a `Caddyfile`
+  (for plain Caddy, or caddy-docker-proxy's `CADDY_DOCKER_CADDYFILE_PATH`) and a
   `docker-compose.override.yml` that puts `caddy_N` labels on the docker-wakeup
   container — Compose loads it automatically, so `docker compose up -d --build`
-  is all it takes for caddy-docker-proxy to pick the sites up. Run it with
-  `docker compose run --rm caddy-generator` (no Node.js on the host) or
-  `npm run generate`. Same `# custom-start`/`# custom-end` and `# wakeup:manual`
-  edit preservation as the NGINX generator. New optional `caddyUpstream` config
-  key (default `host.docker.internal:<proxyPort>`). `setup-service.sh` now asks
-  which reverse proxy to generate configs for; choosing Caddy prints the
-  remaining manual steps for your situation and, if you have no Caddy yet,
-  writes a ready-to-run caddy-docker-proxy stack to
-  `caddy-generator/caddy-stack.yml`. That stack runs Caddy with host networking
-  because ufw on a stock Ubuntu drops all bridge-network → host traffic (a
-  bridge Caddy gets 502s from the wake proxy); the README checklist and the
-  script print the exact ufw rule and a self-test for people who keep Caddy on
-  a bridge network. The example stack lives in `examples/caddy-docker-proxy.yml`.
+  is all it takes. Run it with `docker compose run --rm caddy-generator` (no
+  Node.js on the host) or `npm run caddy`. New optional `caddyUpstream` config
+  key (default `host.docker.internal:<proxyPort>`). The bundled
+  caddy-docker-proxy example stack runs Caddy with host networking because ufw
+  on stock Ubuntu drops bridge-network → host traffic; the README checklist and
+  setup script print the exact ufw rule and a self-test for bridge setups.
+- **`setup-service.sh`** now asks which reverse proxy you use (NGINX, Caddy, or
+  skip), prints tailored next steps — including a ready-to-run Caddy stack at
+  `proxy-generator/caddy-stack.yml` if you have no Caddy yet — and offers to
+  enable + start the SystemD service.
+- **Traefik support** — `npm run traefik` (or the Traefik choice in
+  `setup-service.sh`) writes `proxy-generator/traefik-dynamic.yml` for
+  Traefik's file provider: one catch-all router per domain plus routers for
+  `domains` aliases, hot-reloaded via `providers.file.watch`. New optional
+  `traefikUpstream`, `traefikEntrypoint` and `traefikCertResolver` config keys,
+  and a ready-to-run stack in `examples/traefik.yml`.
+- New per-service `domains` option: extra hostnames that resolve to a service.
+- `CONFIGURATION.md` — complete `config.json` reference (every option, defaults,
+  hook recipes, TCP services, custom wake pages).
+
+### Changed
+
+- **`proxy-generator/` replaces `nginx-generator/`** — one package generates
+  both NGINX (`npm run nginx`) and Caddy (`npm run caddy`) configs, with the
+  same `# custom-start`/`# custom-end` and `# wakeup:manual` edit preservation.
+  Existing confs (hand edits and `.htpasswd` included) are migrated from
+  `nginx-generator/confs/` automatically on first run.
+- Generated NGINX confs are now host-based pass-throughs (no `/proxy/<route>`
+  in `proxy_pass`) and set `X-Forwarded-Host`, aligning app-facing headers with
+  the Caddy behavior.
+  **When upgrading, restart the wake proxy before (or right after) regenerating
+  configs** — the new confs need the new build's host-based routing.
 
 ## 2026-08-17
 

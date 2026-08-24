@@ -21,8 +21,7 @@ myservice.example.com {
 	}
 	# custom-end
 
-	# Every request becomes /proxy/myservice/... on the wake proxy. Caddy adds
-	# X-Forwarded-For/-Proto/-Host and passes WebSockets and SSE through as-is.
-	rewrite * /proxy/myservice{uri}
+	# The wake proxy routes by hostname; Caddy adds X-Forwarded-For/-Proto/-Host
+	# and passes WebSockets and SSE through as-is.
 	reverse_proxy host.docker.internal:8080
 }

@@ -65,7 +65,7 @@ Thank you for considering contributing to Docker Wake-Up! This document provides
 2. Install dependencies:
    ```bash
    cd wake-proxy && npm install && cd ..
-   cd nginx-generator && npm install && cd ..
+   cd proxy-generator && npm install && cd ..
    ```
 
 3. Create a test configuration:

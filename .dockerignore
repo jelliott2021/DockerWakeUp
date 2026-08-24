@@ -3,6 +3,7 @@
 wake-proxy/tmp
 nginx-generator
 caddy-generator
+proxy-generator
 .git
 *.md
 examples
