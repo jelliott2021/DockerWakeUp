@@ -10,7 +10,7 @@ reference; the [README](README.md) covers getting started.
 generator when you added/removed services or changed hostnames
 (`./setup-service.sh` → option 4). Check `jq . config.json` if you're unsure
 the JSON is valid; `curl localhost:8080/healthz` shows how many services were
-loaded.
+loaded (full detail is only returned to local requests).
 
 ## Full example
 
@@ -65,6 +65,7 @@ loaded.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `proxyPort` | number | `8080` | Port the wake proxy listens on. Your reverse proxy forwards here. |
+| `bindHost` | string | `0.0.0.0` | Address the HTTP proxy binds to. Set `"127.0.0.1"` when your reverse proxy runs on the host (NGINX, host-network Caddy/Traefik, cloudflared) so nothing else on the network can bypass it and reach your backends directly. Leave the default only when a bridge-network proxy container must reach the wake proxy. TCP services always bind all interfaces. |
 | `domain` | string | — | Base domain: each service answers on `<route>.<domain>`. Required by the config generators; the wake proxy itself can also match any hostname whose first label equals a route name, so host routing works even without it. |
 | `idleThreshold` | number (seconds) | *unset = idle shutdown disabled* | Stop a service after this much time without a successful request. The example's `259200` is 3 days. The checker runs every 5 minutes, never stops a service mid-wake, and starts each service's idle clock the first time it sees it. |
 | `wakePage` | string (path) | built-in page | Custom "starting up" HTML page for all services, relative to the project root (see [Custom wake pages](#custom-wake-pages)). |
@@ -78,7 +79,7 @@ loaded.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `route` | string | *required* | The service's name and subdomain: `jellyfin` → `jellyfin.<domain>`. Also used for the `/proxy/<route>/…` path form and the idle-timer files. |
+| `route` | string | *required* | The service's name and subdomain: `jellyfin` → `jellyfin.<domain>`. Letters, digits and dashes only (validated at startup). Also used for the `/proxy/<route>/…` path form and the idle-timer files. |
 | `target` | string | *required* | Where the service listens once awake — `http://localhost:8096` for HTTP, `host:port` for `"type": "tcp"`. Must be reachable from the wake proxy (publish container ports on the host, `127.0.0.1:` bindings are fine). |
 | `composeDir` | string (path) | — | Directory containing the service's `docker-compose.yml`. Waking runs `docker compose up -d` here; idle shutdown runs `docker compose stop`. Optional when `startCommand` fully replaces Docker. Docker deployments of DockerWakeUp must be able to see this path inside the container at the same location (the default home-directory mount usually covers it). |
 | `domains` | string[] | `[]` | Extra hostnames that also resolve to this service, e.g. `["jf.example.org"]`. Add them to your reverse proxy / DNS too — the generators include them automatically. |

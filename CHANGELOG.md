@@ -45,6 +45,19 @@
 - **`showLogs` now defaults to `false`** — startup-log streaming on the wake
   page is opt-in per service (`"showLogs": true`), so sensitive boot logs
   can't be exposed by accident.
+- Dependencies updated to clear all `npm audit` findings (axios, express/qs,
+  http-proxy-middleware, form-data, path-to-regexp, …), and the unused
+  `docker-compose` npm package was removed entirely.
+- New `bindHost` option: bind the HTTP proxy to `127.0.0.1` when the reverse
+  proxy runs on the host, so LAN clients can't bypass it and reach backends
+  directly.
+- `/healthz` only returns commit hashes and the service count to local
+  requests; anything arriving through a proxy gets `{ ok: true }`.
+- Service route names are validated at startup (letters, digits, dashes).
+- The container-conflict recovery now passes the container name via
+  `execFile` instead of interpolating it into a shell command.
+- The SystemD unit gains `PrivateTmp=true`; the trust model is documented in
+  `SECURITY.md`.
 
 ### Changed
 

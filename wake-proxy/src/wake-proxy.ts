@@ -33,6 +33,10 @@ interface ServiceConfig {
 
 interface Config {
   proxyPort: number;
+  // Address the HTTP proxy binds to (default 0.0.0.0). Set "127.0.0.1" when
+  // your reverse proxy runs on the host so backends can't be reached by
+  // other machines directly. TCP services always bind all interfaces.
+  bindHost?: string;
   services: ServiceConfig[];
   idleThreshold: number;
   domain?: string;       // host-based routing: <route>.<domain> resolves to the service
@@ -53,8 +57,16 @@ process.on("unhandledRejection", (reason) => {
   console.error("Unhandled rejection in wake-proxy:", reason);
 });
 
+// Routes end up in file names, RegExps, hostnames and generated configs —
+// fail closed on anything but a plain name
+const ROUTE_RE = /^[a-z0-9-]+$/i;
+
 const SERVICES: Record<string, ServiceConfig> = {};
 config.services.forEach((svc) => {
+  if (!ROUTE_RE.test(svc.route ?? "")) {
+    console.error(`Service route ${JSON.stringify(svc.route ?? null)} is invalid (letters, digits and dashes only) — skipping`);
+    return;
+  }
   if (!svc.composeDir && !svc.startCommand) {
     console.warn(`Service ${svc.route}: no composeDir or startCommand configured — it cannot be woken`);
   }
@@ -68,7 +80,7 @@ config.services.forEach((svc) => {
 // The prefixed /proxy/<route> form keeps working for existing setups.
 // ---------------------------------------------------------------------------
 const HOSTS: Record<string, string> = {};
-config.services.forEach((svc) => {
+Object.values(SERVICES).forEach((svc) => {
   if (svc.type === "tcp") return;
   if (config.domain) HOSTS[`${svc.route}.${config.domain}`.toLowerCase()] = svc.route;
   (svc.domains ?? []).forEach((d) => { HOSTS[d.toLowerCase()] = svc.route; });
@@ -101,6 +113,12 @@ function routeForHost(req: { headers: Record<string, unknown> }): string | null 
 // belongs to a service, fall through so the service's own /healthz is proxied.
 app.get("/healthz", (req, res, next) => {
   if (routeForHost(req)) return next();
+  // Full detail (commit hashes, service count) only for direct local checks —
+  // not for whatever hostname a public reverse proxy failed to match
+  const addr = req.socket.remoteAddress ?? "";
+  const local = !req.headers["x-forwarded-for"] &&
+    (addr === "::1" || addr.startsWith("127.") || addr.startsWith("::ffff:127."));
+  if (!local) return void res.json({ ok: true });
   res.json({ ok: true, services: Object.keys(SERVICES).length, update: getUpdateInfo() });
 });
 
@@ -295,8 +313,8 @@ app.use((req, res, next) => {
 });
 
 
-app.listen(config.proxyPort || 8080, () => {
-  console.log(`Wake proxy listening on port ${config.proxyPort || 8080}`);
+app.listen(config.proxyPort || 8080, config.bindHost || "0.0.0.0", () => {
+  console.log(`Wake proxy listening on ${config.bindHost || "0.0.0.0"}:${config.proxyPort || 8080}`);
 });
 
 // Start idle shutdown checker (interval: 5 min)
