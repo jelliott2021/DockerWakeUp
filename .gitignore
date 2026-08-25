@@ -1,12 +1,19 @@
 node_modules/
 .DS_Store
 Thumbs.db
-nginx-generator/confs/*
-!nginx-generator/confs/example.conf
+# legacy generator layouts, kept on disk for existing deployments
+nginx-generator/
+caddy-generator/
+proxy-generator/confs/*
+!proxy-generator/confs/example.conf
+proxy-generator/Caddyfile
+proxy-generator/caddy-stack.yml
+proxy-generator/traefik-dynamic.yml
+proxy-generator/dist/
+proxy-generator/node_modules/
+docker-compose.override.yml
 wake-proxy/dist/
 wake-proxy/node_modules/
 wake-proxy/tmp/
-nginx-generator/dist/
-nginx-generator/node_modules/
 config.json
 docker-wakeup.service

@@ -6,7 +6,8 @@
     {
       "route": "jellyfin",
       "target": "http://localhost:8096",
-      "composeDir": "/home/youruser/jellyfin"
+      "composeDir": "/home/youruser/jellyfin",
+      "showLogs": true
     },
     {
       "route": "portainer",
@@ -29,9 +30,12 @@
     },
     {
       "route": "myapp",
+      "domains": [
+        "myapp.example.net"
+      ],
       "target": "http://localhost:3000",
       "composeDir": "/home/youruser/myapp",
-      "showLogs": false,
+      "showLogs": true,
       "startCommand": "./prepare-mounts.sh",
       "stopCommand": "./backup-data.sh",
       "logsCommand": "tail -f logs/app.log"

@@ -1,5 +1,77 @@
 # Changelog
 
+## 2026-08-24
+
+### Added
+
+- **Host-based routing — works with any reverse proxy.** The wake proxy now
+  resolves services from the request's hostname (`<route>.<domain>`, per-service
+  `domains` aliases, or a first-label match), so the proxy in front only has to
+  forward requests with the Host header intact: NGINX, Caddy, Traefik, a
+  Cloudflare Tunnel, anything. No more `/proxy/<route>` path rewrites — though
+  the old prefixed form still works, so existing configs don't break. The
+  `__wake/status` and `__wake/logs` endpoints are also available at the root of
+  each service's hostname.
+- **Caddy / caddy-docker-proxy support.** The generator produces a `Caddyfile`
+  (for plain Caddy, or caddy-docker-proxy's `CADDY_DOCKER_CADDYFILE_PATH`) and a
+  `docker-compose.override.yml` that puts `caddy_N` labels on the docker-wakeup
+  container — Compose loads it automatically, so `docker compose up -d --build`
+  is all it takes. Run it with `docker compose run --rm caddy-generator` (no
+  Node.js on the host) or `npm run caddy`. New optional `caddyUpstream` config
+  key (default `host.docker.internal:<proxyPort>`). The bundled
+  caddy-docker-proxy example stack runs Caddy with host networking because ufw
+  on stock Ubuntu drops bridge-network → host traffic; the README checklist and
+  setup script print the exact ufw rule and a self-test for bridge setups.
+- **`setup-service.sh`** now asks which reverse proxy you use (NGINX, Caddy, or
+  skip), prints tailored next steps — including a ready-to-run Caddy stack at
+  `proxy-generator/caddy-stack.yml` if you have no Caddy yet — and offers to
+  enable + start the SystemD service.
+- **Traefik support** — `npm run traefik` (or the Traefik choice in
+  `setup-service.sh`) writes `proxy-generator/traefik-dynamic.yml` for
+  Traefik's file provider: one catch-all router per domain plus routers for
+  `domains` aliases, hot-reloaded via `providers.file.watch`. New optional
+  `traefikUpstream`, `traefikEntrypoint` and `traefikCertResolver` config keys,
+  and a ready-to-run stack in `examples/traefik.yml`.
+- New per-service `domains` option: extra hostnames that resolve to a service.
+- `CONFIGURATION.md` — complete `config.json` reference (every option, defaults,
+  hook recipes, TCP services, custom wake pages).
+
+### Security
+
+- `__wake/logs` now only streams while a wake is in progress (or has just
+  failed, so startup errors stay diagnosable). Previously it was an
+  always-open live tap into any service's logs for anyone who could reach the
+  service's URL.
+- **`showLogs` now defaults to `false`** — startup-log streaming on the wake
+  page is opt-in per service (`"showLogs": true`), so sensitive boot logs
+  can't be exposed by accident.
+- Dependencies updated to clear all `npm audit` findings (axios, express/qs,
+  http-proxy-middleware, form-data, path-to-regexp, …), and the unused
+  `docker-compose` npm package was removed entirely.
+- New `bindHost` option: bind the HTTP proxy to `127.0.0.1` when the reverse
+  proxy runs on the host, so LAN clients can't bypass it and reach backends
+  directly.
+- `/healthz` only returns commit hashes and the service count to local
+  requests; anything arriving through a proxy gets `{ ok: true }`.
+- Service route names are validated at startup (letters, digits, dashes).
+- The container-conflict recovery now passes the container name via
+  `execFile` instead of interpolating it into a shell command.
+- The SystemD unit gains `PrivateTmp=true`; the trust model is documented in
+  `SECURITY.md`.
+
+### Changed
+
+- **`proxy-generator/` replaces `nginx-generator/`** — one package generates
+  both NGINX (`npm run nginx`) and Caddy (`npm run caddy`) configs, with the
+  same `# custom-start`/`# custom-end` and `# wakeup:manual` edit preservation.
+  Existing confs (hand edits and `.htpasswd` included) are migrated from
+  `nginx-generator/confs/` automatically on first run.
+- Generated NGINX confs are now host-based pass-throughs (no `/proxy/<route>`
+  in `proxy_pass`) and set `X-Forwarded-Host`, aligning app-facing headers with
+  the Caddy behavior.
+  **When upgrading, restart the wake proxy before (or right after) regenerating
+  configs** — the new confs need the new build's host-based routing.
+
 ## 2026-08-17
 
 ### Added

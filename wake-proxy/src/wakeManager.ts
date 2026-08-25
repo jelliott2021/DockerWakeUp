@@ -1,4 +1,4 @@
-import { exec, spawn } from "child_process";
+import { exec, execFile, spawn } from "child_process";
 import fs from "fs";
 import net from "net";
 import path from "path";
@@ -236,8 +236,9 @@ function runStartCommand(cmd: string, cwd: string | undefined, composeRecovery: 
         const containerName = match[1];
         console.warn(`Container conflict detected: ${containerName}. Attempting to remove...`);
 
-        // Remove the conflicting container
-        exec(`docker rm -f ${containerName}`, { env: process.env }, (rmErr: Error | null, rmOut: string, rmStderr: string) => {
+        // Remove the conflicting container. The name comes from parsed docker
+        // stderr — execFile passes it as an argument, never through a shell.
+        execFile("docker", ["rm", "-f", containerName], { env: process.env }, (rmErr: Error | null, rmOut: string, rmStderr: string) => {
           if (rmErr) {
             console.error(`Failed to remove conflicting container: ${rmStderr}`);
             return reject(rmErr);

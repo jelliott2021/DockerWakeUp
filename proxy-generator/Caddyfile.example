@@ -1,0 +1,27 @@
+# Example of what the generator produces, and how to keep hand edits.
+#
+# Option 1: put custom lines between the custom-start/custom-end markers of
+# a site block — they are carried over every time the generator regenerates
+# the Caddyfile (matched by site address).
+#
+# Option 2: add a line containing exactly
+#     # wakeup:manual
+# anywhere in the Caddyfile, and the generator will never touch it again.
+#
+# The same markers work in docker-compose.override.yml (one region inside
+# `labels:` — note caddy-docker-proxy label indices follow the order of
+# services in config.json).
+#
+# (This Caddyfile.example itself is documentation only.)
+
+myservice.example.com {
+	# custom-start (lines between these markers survive regeneration)
+	basic_auth {
+		alice $2a$14$replace.with.a.caddy.hash-password.output
+	}
+	# custom-end
+
+	# The wake proxy routes by hostname; Caddy adds X-Forwarded-For/-Proto/-Host
+	# and passes WebSockets and SSE through as-is.
+	reverse_proxy host.docker.internal:8080
+}

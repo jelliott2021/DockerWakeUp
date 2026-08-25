@@ -24,16 +24,22 @@ interface ServiceConfig {
   type?: "http" | "tcp"; // default "http"; "tcp" proxies raw bytes (game servers etc.)
   listenPort?: number;   // tcp only: port the TCP wake proxy listens on
   wakePage?: string;     // optional custom "starting up" page (path to an HTML file)
-  showLogs?: boolean;    // set false to hide container logs from the wake page
+  showLogs?: boolean;    // opt-in: set true to stream container logs on the wake page
   startCommand?: string; // hook run BEFORE docker compose up -d (or the whole start if no composeDir)
   stopCommand?: string;  // hook run AFTER docker compose stop (or the whole stop if no composeDir)
   logsCommand?: string;  // custom startup-log command (default: docker compose logs -f)
+  domains?: string[];    // extra hostnames that resolve to this service (host-based routing)
 }
 
 interface Config {
   proxyPort: number;
+  // Address the HTTP proxy binds to (default 0.0.0.0). Set "127.0.0.1" when
+  // your reverse proxy runs on the host so backends can't be reached by
+  // other machines directly. TCP services always bind all interfaces.
+  bindHost?: string;
   services: ServiceConfig[];
   idleThreshold: number;
+  domain?: string;       // host-based routing: <route>.<domain> resolves to the service
   wakePage?: string;     // default custom wake page for all services
   updateCheck?: boolean; // set false to disable the daily update check
 }
@@ -51,8 +57,16 @@ process.on("unhandledRejection", (reason) => {
   console.error("Unhandled rejection in wake-proxy:", reason);
 });
 
+// Routes end up in file names, RegExps, hostnames and generated configs —
+// fail closed on anything but a plain name
+const ROUTE_RE = /^[a-z0-9-]+$/i;
+
 const SERVICES: Record<string, ServiceConfig> = {};
 config.services.forEach((svc) => {
+  if (!ROUTE_RE.test(svc.route ?? "")) {
+    console.error(`Service route ${JSON.stringify(svc.route ?? null)} is invalid (letters, digits and dashes only) — skipping`);
+    return;
+  }
   if (!svc.composeDir && !svc.startCommand) {
     console.warn(`Service ${svc.route}: no composeDir or startCommand configured — it cannot be woken`);
   }
@@ -60,24 +74,57 @@ config.services.forEach((svc) => {
 });
 
 // ---------------------------------------------------------------------------
+// Host-based routing. <route>.<domain> (plus any per-service `domains`
+// aliases) resolves to its service, so a reverse proxy only has to forward
+// requests with the Host header intact — no /proxy/<route> path rewrite.
+// The prefixed /proxy/<route> form keeps working for existing setups.
+// ---------------------------------------------------------------------------
+const HOSTS: Record<string, string> = {};
+Object.values(SERVICES).forEach((svc) => {
+  if (svc.type === "tcp") return;
+  if (config.domain) HOSTS[`${svc.route}.${config.domain}`.toLowerCase()] = svc.route;
+  (svc.domains ?? []).forEach((d) => { HOSTS[d.toLowerCase()] = svc.route; });
+});
+
+/**
+ * The service a request's hostname points at, or null. X-Forwarded-Host wins
+ * over Host so the original hostname survives any intermediate proxies.
+ * Falls back to matching the first DNS label against route names, which
+ * makes host routing work even when `domain` isn't set in config.json.
+ */
+function routeForHost(req: { headers: Record<string, unknown> }): string | null {
+  const raw = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "")
+    .split(",")[0].trim().toLowerCase();
+  if (!raw) return null;
+  const host = raw.replace(/:\d+$/, "");
+  if (HOSTS[host]) return HOSTS[host];
+  const label = host.split(".")[0];
+  if (SERVICES[label] && SERVICES[label].type !== "tcp") return label;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Wake status endpoints (must be registered BEFORE the proxy middleware).
 // Behind nginx, the browser requests /__wake/... which nginx rewrites to
 // /proxy/<route>/__wake/...; direct access uses the full path.
 // ---------------------------------------------------------------------------
 
-// Liveness probe (used by the docker-compose healthcheck)
-app.get("/healthz", (_req, res) => {
+// Liveness probe (used by the docker-compose healthcheck). On a hostname that
+// belongs to a service, fall through so the service's own /healthz is proxied.
+app.get("/healthz", (req, res, next) => {
+  if (routeForHost(req)) return next();
+  // Full detail (commit hashes, service count) only for direct local checks —
+  // not for whatever hostname a public reverse proxy failed to match
+  const addr = req.socket.remoteAddress ?? "";
+  const local = !req.headers["x-forwarded-for"] &&
+    (addr === "::1" || addr.startsWith("127.") || addr.startsWith("::ffff:127."));
+  if (!local) return void res.json({ ok: true });
   res.json({ ok: true, services: Object.keys(SERVICES).length, update: getUpdateInfo() });
 });
 
 // JSON readiness poll used by the wake page
-app.get("/proxy/:route/__wake/status", async (req, res) => {
-  const svc = SERVICES[req.params.route];
-  if (!svc) {
-    res.status(404).json({ error: "unknown service" });
-    return;
-  }
-  const status = getWakeStatus(req.params.route);
+async function wakeStatusHandler(svc: ServiceConfig, res: express.Response): Promise<void> {
+  const status = getWakeStatus(svc.route);
   const ready = await isServiceReady(svc);
   res.json({
     state: status.state,
@@ -85,19 +132,13 @@ app.get("/proxy/:route/__wake/status", async (req, res) => {
     startedAt: status.startedAt,
     error: status.error,
     // For the "usually ready in ~Xs" progress estimate
-    expectedMs: getExpectedWakeMs(req.params.route),
+    expectedMs: getExpectedWakeMs(svc.route),
     elapsedMs: status.state === "starting" && status.startedAt ? Date.now() - status.startedAt : null,
   });
-});
+}
 
 // Live startup logs streamed as Server-Sent Events
-app.get("/proxy/:route/__wake/logs", (req, res) => {
-  const svc = SERVICES[req.params.route];
-  if (!svc) {
-    res.sendStatus(404);
-    return;
-  }
-
+function wakeLogsHandler(svc: ServiceConfig, req: express.Request, res: express.Response): void {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache, no-transform",
@@ -106,9 +147,18 @@ app.get("/proxy/:route/__wake/logs", (req, res) => {
   });
   res.write("retry: 3000\n\n");
 
+  // Logs exist for the startup page only. Streaming is limited to an active
+  // (or just-failed) wake — otherwise this endpoint would be a public live
+  // tap into any running service's logs, and `--tail` would expose the
+  // previous run's logs for sleeping ones.
+  const state = getWakeStatus(svc.route).state;
   let stopLogs = () => { };
-  if (svc.showLogs === false) {
-    res.write(`data: ${JSON.stringify("[wake-proxy] log streaming is disabled for this service")}\n\n`);
+  if (svc.showLogs !== true) {
+    // Off by default: startup logs often contain config/connection details,
+    // and anyone who can reach the URL can read this stream during a wake.
+    res.write(`data: ${JSON.stringify('[wake-proxy] log streaming is disabled for this service (set "showLogs": true in config.json to enable)')}\n\n`);
+  } else if (state !== "starting" && state !== "failed") {
+    res.write(`data: ${JSON.stringify("[wake-proxy] log streaming is only available while the service is starting")}\n\n`);
   } else {
     stopLogs = streamServiceLogs(svc, (line) => {
       res.write(`data: ${JSON.stringify(line)}\n\n`);
@@ -122,6 +172,30 @@ app.get("/proxy/:route/__wake/logs", (req, res) => {
     clearInterval(ping);
     stopLogs();
   });
+}
+
+// Path-prefixed form (direct access / legacy reverse proxy configs)
+app.get("/proxy/:route/__wake/status", (req, res) => {
+  const svc = SERVICES[req.params.route];
+  if (!svc) return void res.status(404).json({ error: "unknown service" });
+  wakeStatusHandler(svc, res);
+});
+app.get("/proxy/:route/__wake/logs", (req, res) => {
+  const svc = SERVICES[req.params.route];
+  if (!svc) return void res.sendStatus(404);
+  wakeLogsHandler(svc, req, res);
+});
+
+// Host-resolved form (reverse proxies that just forward the request)
+app.get("/__wake/status", (req, res, next) => {
+  const route = routeForHost(req);
+  if (!route) return next();
+  wakeStatusHandler(SERVICES[route], res);
+});
+app.get("/__wake/logs", (req, res, next) => {
+  const route = routeForHost(req);
+  if (!route) return next();
+  wakeLogsHandler(SERVICES[route], req, res);
 });
 
 // ---------------------------------------------------------------------------
@@ -215,6 +289,7 @@ async function handleProxyError(route: string, svc: ServiceConfig, req: any, res
   }
 }
 
+const HTTP_PROXIES: Record<string, ReturnType<typeof createProxyMiddleware>> = {};
 Object.entries(SERVICES).forEach(([route, svc]) => {
   if (svc.type === "tcp") {
     if (!svc.listenPort) {
@@ -224,12 +299,22 @@ Object.entries(SERVICES).forEach(([route, svc]) => {
     startTcpProxy(svc as TcpServiceConfig);
     return;
   }
-  app.use(`/proxy/${route}`, createProxyMiddleware(proxyOptions(route, svc, true)));
+  HTTP_PROXIES[route] = createProxyMiddleware(proxyOptions(route, svc, true));
+  app.use(`/proxy/${route}`, HTTP_PROXIES[route]);
+});
+
+// Host-routed requests reuse the same per-service middleware — its
+// pathRewrite only strips /proxy/<route> when the prefix is actually there,
+// so unprefixed paths pass through unchanged.
+app.use((req, res, next) => {
+  const route = routeForHost(req);
+  if (!route) return next();
+  HTTP_PROXIES[route](req, res, next);
 });
 
 
-app.listen(config.proxyPort || 8080, () => {
-  console.log(`Wake proxy listening on port ${config.proxyPort || 8080}`);
+app.listen(config.proxyPort || 8080, config.bindHost || "0.0.0.0", () => {
+  console.log(`Wake proxy listening on ${config.bindHost || "0.0.0.0"}:${config.proxyPort || 8080}`);
 });
 
 // Start idle shutdown checker (interval: 5 min)

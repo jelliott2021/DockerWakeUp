@@ -1,3 +1,7 @@
+# Using caddy-docker-proxy instead of NGINX? Generate the labels first:
+#   docker compose run --rm caddy-generator
+# It writes docker-compose.override.yml, which `docker compose up -d --build`
+# picks up automatically (see the caddy-generator section of the README).
 services:
   docker-wakeup:
     build: .
@@ -44,5 +48,29 @@ services:
     environment:
       - NODE_ENV=production
 
+  # One-shot helper (not started by `docker compose up`): generates reverse
+  # proxy config from config.json without Node.js on the host.
+  #   docker compose run --rm caddy-generator                      # Caddy (default)
+  #   WAKEUP_PROXY=traefik docker compose run --rm caddy-generator # Traefik
+  #   WAKEUP_PROXY=nginx docker compose run --rm caddy-generator   # NGINX confs only
+  # Outputs are chowned to whoever owns config.json — no root-owned files.
+  caddy-generator:
+    image: node:20-alpine
+    profiles: ["tools"]
+    working_dir: /app/proxy-generator
+    volumes:
+      - .:/app
+      # keep node_modules out of the repo checkout
+      - proxy-generator-modules:/app/proxy-generator/node_modules
+    entrypoint:
+      - sh
+      - -c
+      - |
+        npm ci --silent --no-audit --no-fund && npx ts-node generate.ts --proxy ${WAKEUP_PROXY:-caddy}
+        rc=$$?
+        chown -R "$$(stat -c %u:%g /app/config.json)" Caddyfile traefik-dynamic.yml confs /app/docker-compose.override.yml 2>/dev/null
+        exit $$rc
+
 volumes:
   wakeup-tmp:
+  proxy-generator-modules:
