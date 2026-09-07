@@ -290,6 +290,10 @@ to:
 1. Forward requests to the wake proxy (`http://127.0.0.1:8080` by default)
    with the `Host` header intact (or set `X-Forwarded-Host`, which wins).
 2. Ideally set `X-Forwarded-Proto`, so apps generate correct absolute URLs.
+3. Pass WebSocket upgrades through. Caddy, Traefik and cloudflared do this on
+   their own; NGINX needs `proxy_set_header Upgrade $http_upgrade;` and
+   `proxy_set_header Connection $http_connection;` (the generator adds them),
+   and nginx-proxy-manager has a "Websockets Support" toggle per proxy host.
 
 The generators below produce ready-made NGINX and Caddy configs, but anything
 that can do the two things above works. Two examples that need no generator at

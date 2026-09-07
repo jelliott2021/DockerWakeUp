@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-09-07
+
+### Fixed
+
+- **WebSocket connections through the wake proxy failed with close code 1006**
+  (e.g. the VS Code workbench behind code-server, or any app that opens a
+  WebSocket after its page load). With several services configured,
+  http-proxy-middleware's `ws: true` made every service proxy attach its own
+  catch-all `upgrade` listener, so each subscribed proxy tried to claim every
+  WebSocket handshake: the sleeping ones failed, their error handler destroyed
+  the socket, and an unrelated service was woken as a side effect. The wake
+  proxy now routes upgrades itself — `/proxy/<route>` prefix first, then the
+  hostname, exactly like HTTP requests — and hands each one to a single service
+  proxy. Upgrades that match no service are closed instead of left hanging.
+- `X-Forwarded-Host` / `X-Forwarded-Proto` are now forwarded on WebSocket
+  upgrades too (previously only on plain HTTP requests).
+- A successful WebSocket handshake now counts as activity for idle shutdown,
+  so an app that only talks over a WebSocket after loading is not stopped
+  under the user's feet.
+- The generated NGINX sites pass the `Upgrade` / `Connection` headers through
+  (and allow long-lived connections), so WebSockets work out of the box with
+  `npm run nginx`. If you use a hand-written NGINX config or
+  nginx-proxy-manager, make sure WebSocket support is enabled on the proxy
+  host in front of the wake proxy.
+
 ## 2026-08-24
 
 ### Added

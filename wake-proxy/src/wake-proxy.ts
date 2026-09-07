@@ -202,28 +202,34 @@ app.get("/__wake/logs", (req, res, next) => {
 // Service proxies
 // ---------------------------------------------------------------------------
 
+// Preserve the original hostname/scheme for proper CORS/CSRF handling
+function forwardOriginalHost(proxyReq: any, req: any): void {
+  if (req.headers['x-forwarded-host']) {
+    proxyReq.setHeader('X-Forwarded-Host', req.headers['x-forwarded-host']);
+    proxyReq.setHeader('Host', req.headers['x-forwarded-host']);
+  }
+  if (req.headers['x-forwarded-proto']) {
+    proxyReq.setHeader('X-Forwarded-Proto', req.headers['x-forwarded-proto']);
+  }
+}
+
 function proxyOptions(route: string, svc: ServiceConfig, withHandlers: boolean) {
   return {
     target: svc.target,
     changeOrigin: true,
-    ws: true,
     pathRewrite: { [`^/proxy/${route}`]: "" },
-    onProxyReq: (proxyReq: any, req: any, res: any) => {
-      // Preserve original headers for proper CORS/CSRF handling
-      if (req.headers['x-forwarded-host']) {
-        proxyReq.setHeader('X-Forwarded-Host', req.headers['x-forwarded-host']);
-        proxyReq.setHeader('Host', req.headers['x-forwarded-host']);
-      }
-      if (req.headers['x-forwarded-proto']) {
-        proxyReq.setHeader('X-Forwarded-Proto', req.headers['x-forwarded-proto']);
-      }
-    },
+    onProxyReq: (proxyReq: any, req: any, res: any) => forwardOriginalHost(proxyReq, req),
+    // WebSocket upgrades fire a separate event and don't go through onProxyReq
+    onProxyReqWs: (proxyReq: any, req: any) => forwardOriginalHost(proxyReq, req),
     ...(withHandlers ? {
       onProxyRes: (proxyRes: any, req: any, res: any) => {
         if (proxyRes.statusCode && proxyRes.statusCode >= 200 && proxyRes.statusCode < 400) {
           touchLastAccess(route);
         }
       },
+      // A successful WebSocket handshake is activity too — without this, an app
+      // that talks only over a WebSocket after its page load looks idle
+      onOpen: () => touchLastAccess(route),
       onError: (err: any, req: any, res: any, next: any) => handleProxyError(route, svc, req, res, next),
     } : {}),
   };
@@ -313,8 +319,35 @@ app.use((req, res, next) => {
 });
 
 
-app.listen(config.proxyPort || 8080, config.bindHost || "0.0.0.0", () => {
+const server = app.listen(config.proxyPort || 8080, config.bindHost || "0.0.0.0", () => {
   console.log(`Wake proxy listening on ${config.bindHost || "0.0.0.0"}:${config.proxyPort || 8080}`);
+});
+
+// ---------------------------------------------------------------------------
+// WebSocket upgrades. These never pass through Express, so the route has to
+// be resolved here: the /proxy/<route> prefix first, then the hostname —
+// mirroring the HTTP middleware order above. Exactly one service proxy gets
+// the socket; anything unmatched is closed rather than left hanging.
+// ---------------------------------------------------------------------------
+const PROXY_PREFIX_RE = /^\/proxy\/([a-z0-9-]+)(?=\/|\?|$)/i;
+
+function routeForUpgrade(req: { url?: string; headers: Record<string, unknown> }): string | null {
+  const m = PROXY_PREFIX_RE.exec(req.url ?? "");
+  if (m && HTTP_PROXIES[m[1]]) return m[1];
+  const route = routeForHost(req);
+  return route && HTTP_PROXIES[route] ? route : null;
+}
+
+server.on("upgrade", (req, socket, head) => {
+  socket.on("error", () => { }); // a client vanishing mid-handshake is not our problem
+  const route = routeForUpgrade(req);
+  if (!route) {
+    socket.destroy();
+    return;
+  }
+  // Wake logic is shared with HTTP: a sleeping backend errors in onError,
+  // which triggers the wake and closes the socket for the client to retry.
+  HTTP_PROXIES[route].upgrade?.(req as any, socket as any, head);
 });
 
 // Start idle shutdown checker (interval: 5 min)

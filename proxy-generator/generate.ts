@@ -205,6 +205,10 @@ ${customBlock}        ${CUSTOM_END}
         # server block or a tunnel), and apps should generate https URLs
         proxy_set_header X-Forwarded-Proto https;
         proxy_http_version 1.1;
+        # WebSocket support: pass the upgrade handshake through to the wake proxy
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $http_connection;
+        proxy_read_timeout 3600s;
         proxy_buffering off;
         proxy_request_buffering off;
     }
