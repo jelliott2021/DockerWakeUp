@@ -1,4 +1,5 @@
 node_modules/
+brag-output
 .DS_Store
 Thumbs.db
 # legacy generator layouts, kept on disk for existing deployments
