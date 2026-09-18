@@ -1,0 +1,14 @@
+{
+  "proxyPort": 9090,
+  "domain": "example.com",
+  "traefikCertResolver": "letsencrypt",
+  "services": [
+    { "route": "jellyfin", "target": "http://localhost:8096", "composeDir": "/x" },
+    {
+      "route": "photos",
+      "target": "http://localhost:2283",
+      "domains": ["photos.example.org", "pics.example.net"]
+    },
+    { "route": "minecraft", "type": "tcp", "listenPort": 25566, "target": "localhost:25565" }
+  ]
+}

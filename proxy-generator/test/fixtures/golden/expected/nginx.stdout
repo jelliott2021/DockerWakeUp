@@ -1,0 +1,8 @@
+Skipped minecraft: type "tcp" services don't use an HTTP reverse proxy config
+Preserving 2 custom line(s) in jellyfin.conf
+Generated: /tmp/claude-1000/-home-jelliott/a5d0b19a-042f-4c01-839a-3de10bb5d762/scratchpad/golden/repo/proxy-generator/confs/jellyfin.conf
+Kept as-is (# wakeup:manual): /tmp/claude-1000/-home-jelliott/a5d0b19a-042f-4c01-839a-3de10bb5d762/scratchpad/golden/repo/proxy-generator/confs/photos.conf
+Symlinked: /tmp/claude-1000/-home-jelliott/a5d0b19a-042f-4c01-839a-3de10bb5d762/scratchpad/golden/sites/jellyfin.conf → /tmp/claude-1000/-home-jelliott/a5d0b19a-042f-4c01-839a-3de10bb5d762/scratchpad/golden/repo/proxy-generator/confs/jellyfin.conf
+Symlinked: /tmp/claude-1000/-home-jelliott/a5d0b19a-042f-4c01-839a-3de10bb5d762/scratchpad/golden/sites/photos.conf → /tmp/claude-1000/-home-jelliott/a5d0b19a-042f-4c01-839a-3de10bb5d762/scratchpad/golden/repo/proxy-generator/confs/photos.conf
+
+Symlinked into /tmp/claude-1000/-home-jelliott/a5d0b19a-042f-4c01-839a-3de10bb5d762/scratchpad/golden/sites (custom NGINX_SITES_DIR) — reload NGINX yourself.
