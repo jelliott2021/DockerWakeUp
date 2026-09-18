@@ -16,7 +16,7 @@
     "test": "cd .. && npx jest --selectProjects proxy-generator"
   },
   "devDependencies": {
-    "@types/node": "^24.0.10",
+    "@types/node": "^26.6.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3"
   }
