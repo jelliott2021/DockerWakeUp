@@ -1,7 +1,8 @@
 # Docker Wake-Up Proxy System
 
+[![CI](https://github.com/jelliott2021/DockerWakeUp/actions/workflows/ci.yml/badge.svg)](https://github.com/jelliott2021/DockerWakeUp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![TypeScript](https://img.shields.io/badge/TypeScript-4.5+-blue.svg)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-blue.svg)](https://www.typescriptlang.org/)
 [![Docker](https://img.shields.io/badge/Docker-Compatible-blue.svg)](https://www.docker.com/)
 
 ## What's New
@@ -57,6 +58,7 @@ This is especially useful for self-hosted environments where you want to conserv
 - [Service Management](#service-management-️)
 - [Project Structure](#-project-structure)
 - [Requirements](#requirements-)
+- [Development & Testing](#development--testing-)
 - [Contributing](#contributing-)
 - [License](#license-)
 - [Acknowledgments](#acknowledgments-)
@@ -404,7 +406,7 @@ actually waking. Endpoints and details in
 ### 1. Wake Proxy (`wake-proxy/`)
 
 The heart of the system - a TypeScript Express server that:
-- Listens for incoming HTTP requests
+- Listens for incoming HTTP requests and routes them by hostname (or `/proxy/<route>`)
 - Automatically starts containers using Docker Compose
 - Proxies requests to the target services
 - Implements cooldown logic to prevent rapid restarts
@@ -415,6 +417,10 @@ The heart of the system - a TypeScript Express server that:
 - WebSocket support for real-time applications
 - Conflict resolution for container naming issues
 - Health check monitoring before proxying
+
+The code is split into small modules (`config`, `routing`, `app`, `proxy`,
+`wakeManager`, `idleShutdown`, `tcpProxy`, …); [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+walks through a request step by step and says which module does what.
 
 ### 2. NGINX Generator (`proxy-generator/`)
 
@@ -635,34 +641,47 @@ the proxy by hand to see the error directly: `cd wake-proxy && node dist/wake-pr
 ## 📁 Project Structure
 
 ```
-docker-wakeup/
-├── config.json                 # Main configuration file (Should intially be made by you)
+DockerWakeUp/
+├── config.json                 # Your configuration (created from the example)
 ├── config.json.example         # Example configuration
 ├── CONFIGURATION.md            # Full config.json reference (every option + recipes)
 ├── README.md                   # This file
-├── LICENSE                     # MIT license
-├── CONTRIBUTING.md             # Contribution guidelines
+├── CHANGELOG.md / SECURITY.md / CONTRIBUTING.md / LICENSE
+├── docs/ARCHITECTURE.md        # How a request flows through the code
 ├── docker-wakeup.service.example  # SystemD service template
 ├── docker-compose.yml          # Run DockerWakeUp with Docker (+ one-shot generator)
 ├── docker-compose.override.yml # Generated: caddy-docker-proxy labels override
+├── Dockerfile                  # Image for the Docker deployment
 ├── ecosystem.config.js         # PM2 configuration template
-├── setup-service.sh            # Automated service setup script
-├── wake-proxy/                 # Wake proxy service
-│   ├── src/
-│   │   └── wake-proxy.ts      # Main proxy logic
-│   ├── package.json           # Dependencies
-│   ├── tsconfig.json          # TypeScript config
-│   └── dist/                  # Compiled JavaScript
-├── proxy-generator/            # Reverse proxy config generator (NGINX + Caddy)
-│   ├── generate.ts            # Generator script (npm run nginx | npm run caddy)
-│   ├── confs/                 # Generated NGINX configs (jellyfin.conf, ...)
-│   ├── Caddyfile              # Generated (plain Caddy / CDP base Caddyfile)
-│   ├── traefik-dynamic.yml    # Generated Traefik file-provider config
-│   └── Caddyfile.example      # What the Caddy output looks like
-└── examples/
-    ├── custom-wake-page.html  # Custom startup page example
-    ├── caddy-docker-proxy.yml # caddy-docker-proxy stack fronting DockerWakeUp
-    └── traefik.yml            # Traefik stack fronting DockerWakeUp
+├── setup-service.sh            # Automated setup script
+├── wake-proxy/                 # The wake proxy service (own package.json)
+│   ├── src/                    # TypeScript sources, one module per concern
+│   │   ├── wake-proxy.ts       #   entry point → dist/wake-proxy.js
+│   │   ├── config.ts, routing.ts, app.ts, proxy.ts, wakeEndpoints.ts, wakePage.ts
+│   │   ├── wakeManager.ts, idleShutdown.ts, tcpProxy.ts, lastAccess.ts
+│   │   └── updateChecker.ts, shell.ts, util.ts, server.ts
+│   ├── test/                   # Jest unit + integration tests (100% coverage)
+│   ├── dist/                   # Compiled JavaScript (npm run build)
+│   └── tmp/                    # Idle timers + wake history (state on disk)
+├── proxy-generator/            # Reverse proxy config generator (own package.json)
+│   ├── generate.ts             # Entry point (npm run nginx | caddy | traefik)
+│   ├── src/                    # cli, config, context, markers, nginx, caddy, traefik
+│   ├── test/                   # Jest tests incl. byte-for-byte golden outputs
+│   ├── confs/                  # Generated NGINX configs (jellyfin.conf, ...)
+│   ├── Caddyfile               # Generated (plain Caddy / CDP base Caddyfile)
+│   ├── traefik-dynamic.yml     # Generated Traefik file-provider config
+│   └── Caddyfile.example       # What the Caddy output looks like
+├── examples/
+│   ├── custom-wake-page.html  # Custom startup page example
+│   ├── caddy-docker-proxy.yml # caddy-docker-proxy stack fronting DockerWakeUp
+│   └── traefik.yml            # Traefik stack fronting DockerWakeUp
+├── test/                       # Cross-package test suites (see Development & Testing)
+│   ├── api/                    #   Postman collection + newman runner
+│   ├── e2e/                    #   Playwright browser tests of the wake page
+│   ├── setup-service/          #   bats tests for setup-service.sh
+│   └── support/                #   the harness that starts a proxy for both
+├── .github/workflows/ci.yml    # CI: lint, types, tests, Docker build for every PR
+└── package.json                # Development tooling only (lint, tests) — not deployed
 ```
 
 ## Requirements 🔧
@@ -676,7 +695,7 @@ docker-wakeup/
 ### Software Dependencies
 - **Docker**: 20.10+
 - **Docker Compose**: 2.0+
-- **Node.js**: 16.0+
+- **Node.js**: 20+ (SystemD/PM2 deployments; the Docker image ships its own)
 - **NGINX**: 1.18+ — or **Caddy** 2.x / caddy-docker-proxy — or **Traefik** v3
 - **jq**: 1.6+ (for JSON parsing)
 
@@ -685,33 +704,30 @@ docker-wakeup/
 - **Certbot**: For automatic SSL certificate management
 - **UFW**: For firewall configuration
 
+## Development & Testing 🧪
+
+```bash
+npm run install:all              # root tooling + both packages
+npm run test:all                 # lint, types, shellcheck, unit/integration, API, e2e, setup script
+```
+
+| Layer | What | Command |
+|-------|------|---------|
+| Unit & integration | Jest suites for both packages, 100% coverage enforced; the wake page's browser script runs under jsdom | `npm run test:coverage` |
+| API | A Postman collection ([test/api](test/api)) run with newman against a proxy started on free ports | `npm run test:api` |
+| End-to-end | Playwright drives Chromium through the wake page: live logs, auto-reload, custom pages, failures | `npm run test:e2e` |
+| Setup script | bats tests for `setup-service.sh` with `sudo`/`docker`/`git` shimmed | `npm run test:setup-script` |
+
+The same checks run in GitHub Actions for every pull request to `main`
+(plus a Docker image build and `/healthz` smoke test). Setup details,
+conventions and how the tests are organised: [CONTRIBUTING.md](CONTRIBUTING.md);
+how the code fits together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## Contributing 🤝
 
-We welcome contributions! Here's how you can help:
-
-1. **Fork the repository**
-2. **Create a feature branch**
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
-3. **Make your changes**
-4. **Add tests if applicable**
-5. **Commit your changes**
-   ```bash
-   git commit -m "Add: your feature description"
-   ```
-6. **Push to your fork**
-   ```bash
-   git push origin feature/your-feature-name
-   ```
-7. **Create a Pull Request**
-
-### Development Guidelines
-- Use TypeScript for new features
-- Follow existing code style
-- Add JSDoc comments for public functions
-- Test with multiple Docker services
-- Update documentation for new features
+Contributions are welcome — fork, branch, add tests, run `npm run test:all`
+and open a pull request. [CONTRIBUTING.md](CONTRIBUTING.md) has the details
+(setup, checks, code style).
 
 ### Reporting Issues
 - Use the GitHub issue tracker

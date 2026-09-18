@@ -157,6 +157,16 @@ both at the root of each service's hostname and under `/proxy/<route>/`:
 Docker deployments: keep custom pages in `examples/` (mounted into the
 container) or use an absolute path under your home directory.
 
+## Environment variables
+
+Two variables change where the wake proxy looks for its files; neither is
+needed for the documented deployments.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WAKEUP_CONFIG` | `config.json` in the project root | Path of the config file to load |
+| `WAKEUP_STATE_DIR` | `wake-proxy/tmp` | Directory for the marker files described below |
+
 ## State on disk
 
 The wake proxy keeps small marker files in `wake-proxy/tmp/` (a named volume
