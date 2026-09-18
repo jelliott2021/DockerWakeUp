@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
-    "target": "es2020",
+    "target": "es2022",
     "module": "commonjs",
-    "lib": ["es2020", "dom"],
+    "lib": ["es2022", "dom"],
     "types": ["node", "connect"],
     "moduleResolution": "node",
     "outDir": "./dist",
