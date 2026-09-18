@@ -1,0 +1,25 @@
+# Dependencies and build output
+node_modules/
+**/dist/
+coverage/
+playwright-report/
+test-results/
+package-lock.json
+
+# Generated or deployment-owned files (ecosystem.config.js is a PM2 template written by setup-service.sh)
+proxy-generator/confs/
+proxy-generator/Caddyfile
+proxy-generator/traefik-dynamic.yml
+docker-compose.override.yml
+wake-proxy/tmp/
+nginx-generator/
+caddy-generator/
+brag-output/
+.claude/
+
+# Hand-formatted docs and configs
+*.md
+*.yml
+*.yaml
+*.html
+ecosystem.config.js

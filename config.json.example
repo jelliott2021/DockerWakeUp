@@ -30,9 +30,7 @@
     },
     {
       "route": "myapp",
-      "domains": [
-        "myapp.example.net"
-      ],
+      "domains": ["myapp.example.net"],
       "target": "http://localhost:3000",
       "composeDir": "/home/youruser/myapp",
       "showLogs": true,

@@ -1,0 +1,10 @@
+{
+  // Type-checks the tests together with the sources (used by ts-jest and
+  // `npm run typecheck`); the build itself uses tsconfig.json.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "connect", "jest"],
+    "noEmit": true
+  },
+  "include": ["src/**/*", "test/**/*"]
+}
