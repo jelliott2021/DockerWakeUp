@@ -1,0 +1,4 @@
+Skipped minecraft: type "tcp" services don't use an HTTP reverse proxy config
+Generated: /tmp/claude-1000/-home-jelliott/a5d0b19a-042f-4c01-839a-3de10bb5d762/scratchpad/golden/repo/proxy-generator/traefik-dynamic.yml (catch-all *.example.com + 1 alias router(s))
+
+Upstream for Traefik: http://host.docker.internal:9090 (default — set "traefikUpstream" in config.json to change)
