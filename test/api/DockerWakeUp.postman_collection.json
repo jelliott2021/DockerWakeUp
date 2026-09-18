@@ -1,0 +1,682 @@
+{
+  "info": {
+    "name": "DockerWakeUp wake proxy",
+    "description": "API tests for the wake proxy: health check, wake status endpoints, proxying, and the sleeping-service behaviours (wake page, Retry-After, wait-and-replay, failure reporting).\n\nRun with `npm run test:api` (starts a proxy on free ports and runs this collection with newman), or import it into Postman together with an environment providing baseUrl, domain, upHost, upPort, sleepyHost, dozyHost, customHost and neverHost (see test/api/run.ts for the values).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health: local check reports the service count",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/healthz",
+          "host": ["{{baseUrl}}"],
+          "path": ["healthz"]
+        },
+        "description": "Direct local requests get the full detail (service count, update check)."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('ok with service count and update info', () => {",
+              "  pm.expect(body.ok).to.be.true;",
+              "  pm.expect(body.services).to.equal(5);",
+              "  pm.expect(body.update).to.have.all.keys('localCommit', 'latestCommit', 'updateAvailable', 'checkedAt');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Health: forwarded requests get no detail",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Forwarded-For",
+            "value": "203.0.113.9"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/healthz",
+          "host": ["{{baseUrl}}"],
+          "path": ["healthz"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('only ok:true', () => pm.expect(pm.response.json()).to.eql({ ok: true }));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Health: a service hostname is proxied through",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Host",
+            "value": "{{upHost}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/healthz",
+          "host": ["{{baseUrl}}"],
+          "path": ["healthz"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('answered by the service itself', () => {",
+              "  pm.expect(body.name).to.equal('up');",
+              "  pm.expect(body.url).to.equal('/healthz');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Wake status: unknown route is 404",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/proxy/nope/__wake/status",
+          "host": ["{{baseUrl}}"],
+          "path": ["proxy", "nope", "__wake", "status"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 404', () => pm.response.to.have.status(404));",
+              "pm.test('explains the error', () => pm.expect(pm.response.json()).to.eql({ error: 'unknown service' }));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Wake status: running service (path-prefixed form)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/proxy/up/__wake/status",
+          "host": ["{{baseUrl}}"],
+          "path": ["proxy", "up", "__wake", "status"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('ready, never woken', () => {",
+              "  pm.expect(body.ready).to.be.true;",
+              "  pm.expect(body.state).to.equal('idle');",
+              "  pm.expect(body.expectedMs).to.be.null;",
+              "  pm.expect(body.elapsedMs).to.be.null;",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Wake status: running service (host form)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Host",
+            "value": "{{upHost}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/__wake/status",
+          "host": ["{{baseUrl}}"],
+          "path": ["__wake", "status"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('ready', () => pm.expect(pm.response.json().ready).to.be.true);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Wake logs: unknown route is 404",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/proxy/nope/__wake/logs",
+          "host": ["{{baseUrl}}"],
+          "path": ["proxy", "nope", "__wake", "logs"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": ["pm.test('status is 404', () => pm.response.to.have.status(404));"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Proxy: host-routed request passes the path through",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Host",
+            "value": "{{upHost}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/items?x=1",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "items"],
+          "query": [
+            {
+              "key": "x",
+              "value": "1"
+            }
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('path untouched, Host rewritten to the target', () => {",
+              "  pm.expect(body.url).to.equal('/api/items?x=1');",
+              "  pm.expect(body.headers.host).to.equal('127.0.0.1:' + pm.variables.get('upPort'));",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Proxy: /proxy/<route> prefix is stripped",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/proxy/up/api/items?x=1",
+          "host": ["{{baseUrl}}"],
+          "path": ["proxy", "up", "api", "items"],
+          "query": [
+            {
+              "key": "x",
+              "value": "1"
+            }
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('prefix removed', () => pm.expect(pm.response.json().url).to.equal('/api/items?x=1'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Proxy: forwarded host and scheme reach the service",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Host",
+            "value": "{{upHost}}"
+          },
+          {
+            "key": "X-Forwarded-Host",
+            "value": "{{upHost}}"
+          },
+          {
+            "key": "X-Forwarded-Proto",
+            "value": "https"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/",
+          "host": ["{{baseUrl}}"],
+          "path": []
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "const h = pm.response.json().headers;",
+              "pm.test('X-Forwarded-* preserved', () => {",
+              "  pm.expect(h.host).to.equal(pm.variables.get('upHost'));",
+              "  pm.expect(h['x-forwarded-host']).to.equal(pm.variables.get('upHost'));",
+              "  pm.expect(h['x-forwarded-proto']).to.equal('https');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Proxy: unknown hostname is 404",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Host",
+            "value": "nothing.{{domain}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/",
+          "host": ["{{baseUrl}}"],
+          "path": []
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": ["pm.test('status is 404', () => pm.response.to.have.status(404));"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sleeping service: POST is refused with Retry-After and starts the wake",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Host",
+            "value": "{{sleepyHost}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/thing",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "thing"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\"hello\": \"world\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Non-idempotent requests cannot be replayed, so they are refused immediately while the service wakes."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 503', () => pm.response.to.have.status(503));",
+              "pm.test('Retry-After: 15', () => pm.expect(pm.response.headers.get('Retry-After')).to.equal('15'));",
+              "pm.test('explains the wake', () => pm.expect(pm.response.json().error).to.include('sleepy is starting up'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sleeping service: poll until ready",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Host",
+            "value": "{{sleepyHost}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/__wake/status",
+          "host": ["{{baseUrl}}"],
+          "path": ["__wake", "status"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "const attempts = Number(pm.variables.get('sleepyPolls') || 0) + 1;",
+              "pm.variables.set('sleepyPolls', attempts);",
+              "if (!(body.ready === true && body.state === 'ready') && attempts < 60) {",
+              "  setTimeout(() => {}, 250); // brief pause before polling again",
+              "  pm.execution.setNextRequest(\"Sleeping service: poll until ready\");",
+              "  return;",
+              "}",
+              "pm.test('status became the expected state within 60 polls', () => pm.expect(body.ready === true && body.state === 'ready', JSON.stringify(body)).to.be.true);",
+              "pm.test('wake duration recorded', () => pm.expect(body.expectedMs).to.be.a('number').above(0));",
+              "pm.test('startedAt is a timestamp', () => pm.expect(body.startedAt).to.be.a('number'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sleeping service: requests now reach it",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Host",
+            "value": "{{sleepyHost}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/thing",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "thing"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('answered by the woken service', () => {",
+              "  pm.expect(body.name).to.equal('sleepy');",
+              "  pm.expect(body.url).to.equal('/api/thing');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sleeping service: browsers get the wake page",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Host",
+            "value": "{{dozyHost}}"
+          },
+          {
+            "key": "Accept",
+            "value": "text/html,application/xhtml+xml"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/",
+          "host": ["{{baseUrl}}"],
+          "path": []
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 503', () => pm.response.to.have.status(503));",
+              "pm.test('HTML with Retry-After: 5', () => {",
+              "  pm.expect(pm.response.headers.get('Content-Type')).to.include('text/html');",
+              "  pm.expect(pm.response.headers.get('Retry-After')).to.equal('5');",
+              "});",
+              "pm.test('is the wake page for dozy', () => {",
+              "  pm.expect(pm.response.text()).to.include('<title>Starting dozy…</title>');",
+              "  pm.expect(pm.response.text()).to.include('/__wake');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sleeping service: poll dozy until ready",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Host",
+            "value": "{{dozyHost}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/__wake/status",
+          "host": ["{{baseUrl}}"],
+          "path": ["__wake", "status"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "const attempts = Number(pm.variables.get('dozyPolls') || 0) + 1;",
+              "pm.variables.set('dozyPolls', attempts);",
+              "if (!(body.ready === true) && attempts < 60) {",
+              "  setTimeout(() => {}, 250); // brief pause before polling again",
+              "  pm.execution.setNextRequest(\"Sleeping service: poll dozy until ready\");",
+              "  return;",
+              "}",
+              "pm.test('status became the expected state within 60 polls', () => pm.expect(body.ready === true, JSON.stringify(body)).to.be.true);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sleeping service: the app answers after the wake",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Host",
+            "value": "{{dozyHost}}"
+          },
+          {
+            "key": "Accept",
+            "value": "text/html"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/",
+          "host": ["{{baseUrl}}"],
+          "path": []
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('the service page', () => pm.expect(pm.response.text()).to.include('dozy service is running'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Safe GET waits for a waking service and is replayed",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Host",
+            "value": "{{customHost}}"
+          },
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/data",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "data"]
+        },
+        "description": "GET/HEAD requests without a browser Accept header are held until the service answers, then replayed once."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('answered by the service after the wake', () => pm.expect(pm.response.json().name).to.equal('custom'));",
+              "pm.test('took a wake, not a cached answer', () => pm.expect(pm.response.responseTime).to.be.above(50));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Failed wake: browsers still get the wake page",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Host",
+            "value": "{{neverHost}}"
+          },
+          {
+            "key": "Accept",
+            "value": "text/html"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/",
+          "host": ["{{baseUrl}}"],
+          "path": []
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 503', () => pm.response.to.have.status(503));",
+              "pm.test('is the wake page', () => pm.expect(pm.response.text()).to.include('<title>Starting never…</title>'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Failed wake: status reports the failure",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Host",
+            "value": "{{neverHost}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/__wake/status",
+          "host": ["{{baseUrl}}"],
+          "path": ["__wake", "status"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "const attempts = Number(pm.variables.get('neverPolls') || 0) + 1;",
+              "pm.variables.set('neverPolls', attempts);",
+              "if (!(body.state === 'failed') && attempts < 60) {",
+              "  setTimeout(() => {}, 250); // brief pause before polling again",
+              "  pm.execution.setNextRequest(\"Failed wake: status reports the failure\");",
+              "  return;",
+              "}",
+              "pm.test('status became the expected state within 60 polls', () => pm.expect(body.state === 'failed', JSON.stringify(body)).to.be.true);",
+              "pm.test('carries the error', () => pm.expect(body.error).to.include('Command failed'));",
+              "pm.test('not ready', () => pm.expect(body.ready).to.be.false);"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8080"
+    },
+    {
+      "key": "domain",
+      "value": "test.local"
+    }
+  ]
+}
