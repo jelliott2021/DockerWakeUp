@@ -1,0 +1,133 @@
+# Runs on every pull request to main and on pushes to main.
+# Every job mirrors an npm script, so `npm run test:all` reproduces the whole
+# pipeline locally (see CONTRIBUTING.md).
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # The lockfiles of the root tooling and both packages
+  LOCKFILES: |
+    package-lock.json
+    wake-proxy/package-lock.json
+    proxy-generator/package-lock.json
+
+jobs:
+  lint:
+    name: Lint, format, types, shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ env.LOCKFILES }}
+      - run: npm run install:all
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run shellcheck
+
+  unit:
+    name: Unit & integration tests (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: ${{ env.LOCKFILES }}
+      - run: npm run install:all
+      # Jest enforces the coverage thresholds from jest.config.js
+      - run: npm run test:coverage
+      - name: Upload coverage report
+        if: matrix.node == 22
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/lcov.info
+          retention-days: 14
+
+  api:
+    name: API tests (Postman collection via newman)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ env.LOCKFILES }}
+      - run: npm run install:all
+      - run: npm run test:api
+
+  e2e:
+    name: End-to-end tests (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ env.LOCKFILES }}
+      - run: npm run install:all
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 14
+
+  setup-script:
+    name: Setup script (bats)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run test:setup-script
+
+  docker:
+    name: Docker image builds and serves /healthz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t docker-wakeup:ci .
+      - name: Smoke test the image
+        run: |
+          printf '{ "proxyPort": 18080, "bindHost": "127.0.0.1", "updateCheck": false, "services": [] }\n' > ci-config.json
+          docker run -d --name docker-wakeup --network host \
+            -v "$PWD/ci-config.json:/app/config.json:ro" docker-wakeup:ci
+          for _ in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:18080/healthz | grep -q '"ok":true'; then
+              echo "healthz OK"; docker rm -f docker-wakeup; exit 0
+            fi
+            sleep 1
+          done
+          echo "healthz did not answer"; docker logs docker-wakeup; docker rm -f docker-wakeup; exit 1
