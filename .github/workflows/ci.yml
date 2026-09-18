@@ -28,7 +28,7 @@ jobs:
     name: Lint, format, types, shellcheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -47,7 +47,7 @@ jobs:
       matrix:
         node: [20, 22]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
@@ -68,7 +68,7 @@ jobs:
     name: API tests (Postman collection via newman)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -81,7 +81,7 @@ jobs:
     name: End-to-end tests (Playwright)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -104,7 +104,7 @@ jobs:
     name: Setup script (bats)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -117,7 +117,7 @@ jobs:
     name: Docker image builds and serves /healthz
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: docker build -t docker-wakeup:ci .
       - name: Smoke test the image
         run: |
