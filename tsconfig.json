@@ -1,0 +1,18 @@
+{
+  // Root-level TypeScript (test harnesses, Playwright config). The packages
+  // have their own tsconfig.json / tsconfig.test.json.
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "lib": ["es2022", "dom"],
+    "types": ["node"],
+    "strict": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true
+  },
+  "include": ["test/**/*.ts", "playwright.config.ts"]
+}

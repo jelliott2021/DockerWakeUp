@@ -1,0 +1,47 @@
+{
+  "name": "docker-wakeup-dev",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Repository-wide development tooling for DockerWakeUp: lint, type checks, tests and CI. The deployable packages are wake-proxy/ and proxy-generator/, each with its own package.json.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "install:all": "npm ci && npm ci --prefix wake-proxy && npm ci --prefix proxy-generator",
+    "build": "npm run build --prefix wake-proxy",
+    "typecheck": "tsc -p wake-proxy/tsconfig.test.json && tsc -p proxy-generator/tsconfig.test.json && tsc -p tsconfig.json",
+    "lint": "eslint . && prettier --check .",
+    "lint:fix": "eslint . --fix && prettier --write .",
+    "format": "prettier --write .",
+    "shellcheck": "shellcheck setup-service.sh",
+    "test": "jest",
+    "test:coverage": "jest --coverage",
+    "test:watch": "jest --watch",
+    "test:api": "npm run build && ts-node test/api/run.ts",
+    "test:e2e": "npm run build && playwright test",
+    "test:setup-script": "bats test/setup-service",
+    "test:all": "npm run lint && npm run typecheck && npm run shellcheck && npm run test:coverage && npm run test:api && npm run test:e2e && npm run test:setup-script"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.63.0",
+    "@types/jest": "^30.0.0",
+    "@types/newman": "^5.3.6",
+    "@types/node": "^20.19.10",
+    "@types/supertest": "^7.2.1",
+    "bats": "^1.13.0",
+    "eslint": "^10.10.0",
+    "globals": "^17.12.0",
+    "jest": "^30.5.1",
+    "jest-environment-jsdom": "^30.5.1",
+    "newman": "^6.2.2",
+    "prettier": "^3.9.8",
+    "shellcheck": "^4.1.0",
+    "supertest": "^7.2.2",
+    "ts-jest": "^29.4.12",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.70.0"
+  }
+}

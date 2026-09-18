@@ -18,3 +18,8 @@ wake-proxy/node_modules/
 wake-proxy/tmp/
 config.json
 docker-wakeup.service
+
+# Test and coverage output
+coverage/
+playwright-report/
+test-results/
