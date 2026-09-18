@@ -2,16 +2,19 @@
   "name": "proxy-generator",
   "version": "1.0.0",
   "description": "Generates NGINX, Caddy / caddy-docker-proxy, or Traefik configuration for DockerWakeUp from config.json",
-  "main": "index.js",
+  "license": "MIT",
+  "private": true,
+  "main": "generate.ts",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "generate": "ts-node generate.ts",
     "nginx": "ts-node generate.ts --proxy nginx",
     "caddy": "ts-node generate.ts --proxy caddy",
-    "traefik": "ts-node generate.ts --proxy traefik"
+    "traefik": "ts-node generate.ts --proxy traefik",
+    "test": "cd .. && npx jest --selectProjects proxy-generator"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "devDependencies": {
     "@types/node": "^24.0.10",
     "ts-node": "^10.9.2",
