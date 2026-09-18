@@ -1,5 +1,54 @@
 # Changelog
 
+## 2026-09-17
+
+### Changed
+
+- **Codebase restructure.** The wake proxy is split into focused modules
+  (config, routing, app, proxy, wake endpoints, wake manager, idle shutdown,
+  TCP proxy, state on disk, update checker) behind a thin entry point, and the
+  generator into `proxy-generator/src/` behind a thin `generate.ts`. Nothing
+  changes for deployments: `node dist/wake-proxy.js`, `npm run nginx|caddy|traefik`,
+  the Dockerfile, `docker-compose.yml` and `setup-service.sh` work exactly as
+  before, and the generator's output is byte-for-byte identical (verified by
+  golden tests). See `docs/ARCHITECTURE.md`.
+- `setup-service.sh` is organised into functions with a `main`, is
+  ShellCheck-clean, and no longer aborts when GitHub cannot be reached for the
+  update check (it says so and continues with the local code).
+- Last-access timestamps are written to disk at most once per 10 seconds per
+  service instead of on every successful response; the value kept in memory
+  stays exact.
+- Development tooling: ESLint, Prettier, a root `package.json` with one script
+  per check, and a GitHub Actions pipeline that runs everything for pull
+  requests to `main` (`npm run test:all` runs the same locally). Node.js 20+
+  is the supported baseline for host deployments.
+
+### Added
+
+- **Tests.** Jest unit and integration suites for both packages with 100%
+  statement, branch, function and line coverage enforced in CI; a jsdom suite
+  for the wake page's browser script; a Postman collection run with newman;
+  Playwright end-to-end tests of the wake page in a real Chromium; bats tests
+  for the setup script. `CONTRIBUTING.md` explains the layers.
+- `WAKEUP_CONFIG` and `WAKEUP_STATE_DIR` environment variables (config file
+  and state directory overrides; see CONFIGURATION.md).
+- Startup validation reports duplicate routes, services without a `target`,
+  and `"type": "tcp"` services without a usable `listenPort` (all skipped with
+  a clear message instead of failing later).
+
+### Fixed
+
+- Services answering 4xx on their root URL (auth-protected apps, API-only
+  backends) were never considered ready, so the wake page never reloaded for
+  them and API requests waited for the full timeout. Any answer below 500 now
+  counts as ready, as the code always intended.
+- The wake page's elapsed-time timer kept running after the status line was
+  replaced on success or failure, throwing an error every second in the
+  browser console.
+- Stopping a custom `logsCommand` log stream now ends the whole process group
+  the shell started, so commands like `tail -f app.log` are no longer left
+  running after the wake page is closed.
+
 ## 2026-09-07
 
 ### Fixed
