@@ -1,35 +1,56 @@
+/**
+ * The "starting up" page shown to browsers while a service wakes.
+ *
+ * The built-in page polls `__wake/status` and streams `__wake/logs` (see
+ * CONFIGURATION.md → Custom wake pages); a custom page can replace it.
+ */
 import fs from "fs";
 import path from "path";
+import { PROJECT_ROOT } from "./config";
 
 /**
- * Returns the HTML for the "starting up" page shown to browsers while a
- * service wakes. If a custom page is configured (per-service or global
- * `wakePage` in config.json, path relative to the project root), it is used
- * instead of the built-in one; `{{route}}` inside it is replaced with the
- * service's route name.
+ * HTML for a service's wake page. When a custom page is configured
+ * (per-service or global `wakePage`, absolute or relative to the project
+ * root) it is used instead of the built-in one, with `{{route}}` replaced by
+ * the service's route name. An unreadable custom page falls back to the
+ * built-in one.
  */
-export function renderWakePage(route: string, customPagePath?: string): string {
+export function renderWakePage(
+  route: string,
+  customPagePath?: string,
+  rootDir: string = PROJECT_ROOT,
+): string {
   if (customPagePath) {
     try {
       const resolved = path.isAbsolute(customPagePath)
         ? customPagePath
-        : path.join(__dirname, "../../", customPagePath);
+        : path.join(rootDir, customPagePath);
       const html = fs.readFileSync(resolved, "utf8");
       return html.replace(/\{\{\s*route\s*\}\}/g, route);
     } catch (e) {
-      console.error(`Failed to read custom wake page "${customPagePath}", falling back to default:`, e);
+      console.error(
+        `Failed to read custom wake page "${customPagePath}", falling back to default:`,
+        e,
+      );
     }
   }
   return renderDefaultWakePage(route);
 }
 
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
-// NOTE: String.raw is essential here — the page's inline JS is full of regex
-// escapes (\d, \[, \u001b, ...) that a normal template literal would mangle.
-function renderDefaultWakePage(route: string): string {
+/**
+ * The built-in page. NOTE: String.raw is essential here — the inline JS is
+ * full of regex escapes (\d, \[, \u001b, ...) that a normal template
+ * literal would mangle.
+ */
+export function renderDefaultWakePage(route: string): string {
   const safeRoute = escapeHtml(route);
   const routeJson = JSON.stringify(route);
   return String.raw`<!DOCTYPE html>
@@ -133,7 +154,9 @@ function renderDefaultWakePage(route: string): string {
   var logEl = document.getElementById("log");
   var firstLine = true;
 
-  setInterval(function () {
+  // Replacing the status line's text (ready/failed) removes this span, so the
+  // timer is stopped at that point
+  var elapsedTimer = setInterval(function () {
     var s = Math.floor((Date.now() - start) / 1000);
     document.getElementById("elapsed").textContent =
       s >= 60 ? Math.floor(s / 60) + "m " + (s % 60) + "s" : s + "s";
@@ -234,6 +257,7 @@ function renderDefaultWakePage(route: string): string {
       .then(function (r) { return r.json(); })
       .then(function (st) {
         if (st.ready) {
+          clearInterval(elapsedTimer);
           document.getElementById("status-line").textContent = "Ready! Loading…";
           document.getElementById("bar").style.width = "100%";
           es.close();
@@ -249,6 +273,7 @@ function renderDefaultWakePage(route: string): string {
             Math.min(95, Math.round(100 * elapsedMs / st.expectedMs)) + "%";
         }
         if (st.state === "failed") {
+          clearInterval(elapsedTimer);
           document.getElementById("spinner").style.animationPlayState = "paused";
           document.getElementById("status-line").textContent = "Startup failed.";
           var errEl = document.getElementById("error");
