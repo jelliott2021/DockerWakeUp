@@ -1,9 +1,14 @@
 #!/bin/bash
-
-# Docker Wake-Up Service Setup Script
-# This script helps set up the wake-proxy as a system service
-
-set -e
+#
+# DockerWakeUp setup: builds the wake proxy, generates the reverse proxy
+# configuration and installs DockerWakeUp as a Docker container, a SystemD
+# service or a PM2 process. Interactive — run it from the repository as your
+# regular user (sudo is used only where needed):
+#
+#     ./setup-service.sh
+#
+# Every step is a function; main() runs the menu. Sourcing the file (as the
+# bats tests in test/setup-service do) only defines the functions.
 
 # Colors for output
 RED='\033[0;31m'
@@ -12,70 +17,143 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+CANONICAL_REMOTE="https://github.com/jelliott2021/DockerWakeUp.git"
 
-# Get script directory
+# Repository root (where this script lives) and the wake proxy package
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        # Function to check and update to latest git version from canonical remote
-        update_from_git() {
-            CANONICAL_REMOTE="https://github.com/jelliott2021/DockerWakeUp.git"
-            if [ -d "$SCRIPT_DIR/.git" ]; then
-                echo -e "${YELLOW}Checking for latest code from canonical git remote...${NC}"
-                cd "$SCRIPT_DIR"
-                git fetch "$CANONICAL_REMOTE" HEAD:refs/remotes/origin-upstream 2>/dev/null
-                LOCAL=$(git rev-parse HEAD)
-                REMOTE=$(git rev-parse refs/remotes/origin-upstream)
-                BASE=$(git merge-base HEAD refs/remotes/origin-upstream)
-                if [ "$LOCAL" = "$REMOTE" ]; then
-                    echo -e "${GREEN}You are already on the latest version of the code.${NC}"
-                elif [ "$LOCAL" = "$BASE" ]; then
-                    echo -e "${YELLOW}Your local code is behind the canonical remote. Updating now...${NC}"
-                    git pull "$CANONICAL_REMOTE" HEAD
-                    echo -e "${GREEN}Code updated. Please re-run this script if you want to continue setup.${NC}"
-                    exit 0
-                elif [ "$REMOTE" = "$BASE" ]; then
-                    echo -e "${YELLOW}Your local code is ahead of the canonical remote. (Local changes not pushed)${NC}"
-                else
-                    echo -e "${RED}Your local and canonical remote branches have diverged. Please resolve manually.${NC}"
-                    exit 1
-                fi
-                cd "$SCRIPT_DIR"
-            else
-                echo -e "${RED}Not a git repository. Cannot update from remote.${NC}"
-            fi
-        }
 WAKE_PROXY_DIR="$SCRIPT_DIR/wake-proxy"
 
+# Set by the menu and generate_proxy_configs; read by the "next steps" summary
+DEPLOY_MODE="host"   # host (SystemD/PM2) or docker
+PROXY_CHOICE="nginx" # nginx | caddy | traefik | none
+SERVICE_SETUP=""     # "" (nothing installed), 1 (SystemD/PM2) or docker
+GIT_STATUS="none"    # see git_update_status
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-echo -e "${BLUE}Docker Wake-Up Service Setup${NC}"
-echo "================================"
+# True when running as root (a function so the tests can override it)
+is_root() {
+    [[ $EUID -eq 0 ]]
+}
 
-# Check if running as root for systemd setup
-if [[ $EUID -eq 0 ]] && [[ "$1" != "--pm2" ]]; then
-   echo -e "${RED}Error: Don't run this script as root for systemd setup${NC}"
-   echo "Run as your regular user, we'll use sudo when needed"
-   exit 1
-fi
+# The wake proxy port from config.json (8080 when unset or unreadable)
+config_proxy_port() {
+    local port
+    port=$(sed -n 's/.*"proxyPort"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$SCRIPT_DIR/config.json" 2>/dev/null | head -1)
+    echo "${port:-8080}"
+}
 
-# Function to setup systemd service
-setup_systemd() {
-    echo -e "${YELLOW}Setting up SystemD service...${NC}"
-    
-    # Get current user and directory
-    CURRENT_USER=$(whoami)
-    CURRENT_DIR=$(pwd)
-    
-    # Check if wake-proxy is built
+# Create config.json from the example when it's missing
+ensure_config() {
+    if [ ! -f "$SCRIPT_DIR/config.json" ]; then
+        echo -e "${YELLOW}config.json not found. Creating from example...${NC}"
+        if [ -f "$SCRIPT_DIR/config.json.example" ]; then
+            cp "$SCRIPT_DIR/config.json.example" "$SCRIPT_DIR/config.json"
+            echo -e "${RED}⚠️  Edit config.json with your actual service details before the generated configs will work!${NC}"
+            echo -e "${YELLOW}   (All options are documented in CONFIGURATION.md)${NC}"
+        else
+            echo -e "${RED}Error: No config.json.example found. Please create config.json manually.${NC}"
+            return 1
+        fi
+    fi
+}
+
+# Compare HEAD with the canonical remote. Sets GIT_STATUS to one of
+#   latest | behind | ahead | diverged | offline | none (not a git checkout)
+git_update_status() {
+    GIT_STATUS="none"
+    [ -d "$SCRIPT_DIR/.git" ] || return 0
+    if ! git -C "$SCRIPT_DIR" fetch "$CANONICAL_REMOTE" HEAD:refs/remotes/origin-upstream 2>/dev/null; then
+        GIT_STATUS="offline"
+        return 0
+    fi
+    local local_rev remote_rev base_rev
+    local_rev=$(git -C "$SCRIPT_DIR" rev-parse HEAD)
+    remote_rev=$(git -C "$SCRIPT_DIR" rev-parse refs/remotes/origin-upstream)
+    base_rev=$(git -C "$SCRIPT_DIR" merge-base HEAD refs/remotes/origin-upstream)
+    if [ "$local_rev" = "$remote_rev" ]; then
+        GIT_STATUS="latest"
+    elif [ "$local_rev" = "$base_rev" ]; then
+        GIT_STATUS="behind"
+    elif [ "$remote_rev" = "$base_rev" ]; then
+        GIT_STATUS="ahead"
+    else
+        GIT_STATUS="diverged"
+    fi
+}
+
+# Update to the latest code from the canonical remote (menu option 7)
+update_from_git() {
+    if [ ! -d "$SCRIPT_DIR/.git" ]; then
+        echo -e "${RED}Not a git repository. Cannot update from remote.${NC}"
+        return 0
+    fi
+    echo -e "${YELLOW}Checking for latest code from canonical git remote...${NC}"
+    git_update_status
+    case "$GIT_STATUS" in
+        latest)
+            echo -e "${GREEN}You are already on the latest version of the code.${NC}"
+            ;;
+        behind)
+            echo -e "${YELLOW}Your local code is behind the canonical remote. Updating now...${NC}"
+            git -C "$SCRIPT_DIR" pull "$CANONICAL_REMOTE" HEAD
+            echo -e "${GREEN}Code updated. Please re-run this script if you want to continue setup.${NC}"
+            exit 0
+            ;;
+        ahead)
+            echo -e "${YELLOW}Your local code is ahead of the canonical remote. (Local changes not pushed)${NC}"
+            ;;
+        offline)
+            echo -e "${YELLOW}Could not reach GitHub to check for updates.${NC}"
+            ;;
+        *)
+            echo -e "${RED}Your local and canonical remote branches have diverged. Please resolve manually.${NC}"
+            exit 1
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Building and installing the wake proxy
+# ---------------------------------------------------------------------------
+
+# Install dependencies and compile both packages
+build_project() {
+    echo -e "${YELLOW}Building project dependencies...${NC}"
+
+    if [ -d "$WAKE_PROXY_DIR" ]; then
+        echo -e "${BLUE}Building wake-proxy...${NC}"
+        (cd "$WAKE_PROXY_DIR" && npm install && npm run build) || return 1
+    fi
+
+    # proxy-generator (NGINX, Caddy and Traefik config generation)
+    if [ -d "$SCRIPT_DIR/proxy-generator" ]; then
+        echo -e "${BLUE}Building proxy-generator...${NC}"
+        (cd "$SCRIPT_DIR/proxy-generator" && npm install) || return 1
+    fi
+
+    echo -e "${GREEN}Build completed!${NC}"
+}
+
+# Build the wake proxy if dist/ is missing (SystemD and PM2 setups)
+ensure_built() {
     if [ ! -f "$WAKE_PROXY_DIR/dist/wake-proxy.js" ]; then
         echo -e "${YELLOW}Building wake-proxy...${NC}"
-        cd "$WAKE_PROXY_DIR"
-        npm run build
-        cd "$CURRENT_DIR"
+        (cd "$WAKE_PROXY_DIR" && npm run build) || return 1
     fi
-    
-    # Create service file with correct paths
-    SERVICE_FILE="/tmp/docker-wakeup.service"
-    cat > "$SERVICE_FILE" << EOF
+}
+
+# Install and (optionally) start the SystemD unit
+setup_systemd() {
+    echo -e "${YELLOW}Setting up SystemD service...${NC}"
+    ensure_built || return 1
+
+    local current_user service_file
+    current_user=$(whoami)
+    service_file="/tmp/docker-wakeup.service"
+    cat > "$service_file" << EOF
 [Unit]
 Description=Docker Wake-Up Proxy
 After=network.target docker.service
@@ -83,7 +161,7 @@ Requires=docker.service
 
 [Service]
 Type=simple
-User=$CURRENT_USER
+User=$current_user
 Group=docker
 WorkingDirectory=$WAKE_PROXY_DIR
 ExecStart=/usr/bin/node dist/wake-proxy.js
@@ -107,13 +185,13 @@ ReadWritePaths=$WAKE_PROXY_DIR/tmp
 WantedBy=multi-user.target
 EOF
 
-    # Install service file
-    sudo cp "$SERVICE_FILE" /etc/systemd/system/docker-wakeup.service
+    sudo cp "$service_file" /etc/systemd/system/docker-wakeup.service
     sudo systemctl daemon-reload
-    
+
     echo -e "${GREEN}SystemD service created successfully!${NC}"
     echo ""
-    read -p "Enable auto-start on boot and (re)start docker-wakeup now? (Y/n): " start_now
+    local start_now
+    read -r -p "Enable auto-start on boot and (re)start docker-wakeup now? (Y/n): " start_now
     if [[ ! "$start_now" =~ ^[Nn] ]]; then
         sudo systemctl enable docker-wakeup >/dev/null 2>&1 || true
         if sudo systemctl restart docker-wakeup && sudo systemctl is-active --quiet docker-wakeup; then
@@ -137,25 +215,16 @@ EOF
     echo "  sudo journalctl -u docker-wakeup -f"
 }
 
-# Function to setup PM2 service
+# Install and start under PM2 (installs PM2 itself when missing)
 setup_pm2() {
     echo -e "${YELLOW}Setting up PM2 service...${NC}"
-    
-    # Check if PM2 is installed
+
     if ! command -v pm2 &> /dev/null; then
         echo -e "${YELLOW}Installing PM2...${NC}"
         npm install -g pm2
     fi
-    
-    # Check if wake-proxy is built
-    if [ ! -f "$WAKE_PROXY_DIR/dist/wake-proxy.js" ]; then
-        echo -e "${YELLOW}Building wake-proxy...${NC}"
-        cd "$WAKE_PROXY_DIR"
-        npm run build
-        cd "$SCRIPT_DIR"
-    fi
-    
-    # Create PM2 ecosystem file
+    ensure_built || return 1
+
     cat > "$SCRIPT_DIR/ecosystem.config.js" << EOF
 module.exports = {
   apps: [
@@ -180,13 +249,9 @@ module.exports = {
 };
 EOF
 
-    # Create logs directory
     mkdir -p "$SCRIPT_DIR/logs"
-    
-    # Start with PM2
-    pm2 start ecosystem.config.js
-    pm2 save
-    
+    (cd "$SCRIPT_DIR" && pm2 start ecosystem.config.js && pm2 save) || return 1
+
     echo -e "${GREEN}PM2 service created successfully!${NC}"
     echo -e "${YELLOW}To setup PM2 to start on boot:${NC}"
     echo "  pm2 startup"
@@ -199,46 +264,39 @@ EOF
     echo "  pm2 logs docker-wakeup"
 }
 
-# Function to build dependencies
-build_project() {
-    echo -e "${YELLOW}Building project dependencies...${NC}"
-    
-    # Build wake-proxy
-    if [ -d "$WAKE_PROXY_DIR" ]; then
-        echo -e "${BLUE}Building wake-proxy...${NC}"
-        cd "$WAKE_PROXY_DIR"
-        npm install
-        npm run build
-        cd "$SCRIPT_DIR"
+# Run DockerWakeUp itself as a Docker container: generate configs (Node-free
+# via the one-shot container when needed), then build + start + health check
+setup_docker() {
+    echo -e "${YELLOW}Setting up the Docker deployment...${NC}"
+    if ! docker compose version >/dev/null 2>&1; then
+        echo -e "${RED}Error: docker compose not found — install Docker first (https://docs.docker.com/engine/install/)${NC}"
+        return 1
     fi
-    
-    # Build proxy-generator (NGINX + Caddy config generation)
-    if [ -d "$SCRIPT_DIR/proxy-generator" ]; then
-        echo -e "${BLUE}Building proxy-generator...${NC}"
-        cd "$SCRIPT_DIR/proxy-generator"
-        npm install
-        cd "$SCRIPT_DIR"
+    ensure_config || return 1
+    generate_proxy_configs
+
+    echo -e "${YELLOW}Building and starting the docker-wakeup container...${NC}"
+    (cd "$SCRIPT_DIR" && docker compose up -d --build) || return 1
+
+    local port
+    port=$(config_proxy_port)
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        curl -sf "http://127.0.0.1:$port/healthz" >/dev/null 2>&1 && break
+        sleep 2
+    done
+    if curl -sf "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
+        echo -e "${GREEN}✅ docker-wakeup container is running (wake proxy on port $port)${NC}"
+    else
+        echo -e "${RED}Container started but /healthz isn't answering yet — check: docker logs docker-wakeup${NC}"
     fi
-    
-    echo -e "${GREEN}Build completed!${NC}"
+    SERVICE_SETUP=docker
 }
 
-# Create config.json from the example when it's missing
-ensure_config() {
-    if [ ! -f "$SCRIPT_DIR/config.json" ]; then
-        echo -e "${YELLOW}config.json not found. Creating from example...${NC}"
-        if [ -f "$SCRIPT_DIR/config.json.example" ]; then
-            cp "$SCRIPT_DIR/config.json.example" "$SCRIPT_DIR/config.json"
-            echo -e "${RED}⚠️  Edit config.json with your actual service details before the generated configs will work!${NC}"
-            echo -e "${YELLOW}   (All options are documented in CONFIGURATION.md)${NC}"
-        else
-            echo -e "${RED}Error: No config.json.example found. Please create config.json manually.${NC}"
-            return 1
-        fi
-    fi
-}
+# ---------------------------------------------------------------------------
+# Reverse proxy configuration
+# ---------------------------------------------------------------------------
 
-# Function to generate NGINX configurations
+# Generate the NGINX vhosts, symlink them into sites-enabled and reload NGINX
 generate_nginx_configs() {
     echo -e "${YELLOW}Generating NGINX configurations...${NC}"
     ensure_config || return 1
@@ -252,29 +310,24 @@ generate_nginx_configs() {
         # No Node.js on the host: generate the confs in a container, then do
         # the host-side part (symlinks + reload) here in bash
         echo -e "${BLUE}Generating NGINX configs in a container (no Node.js on the host)...${NC}"
-        (cd "$SCRIPT_DIR" && WAKEUP_PROXY=nginx docker compose run --rm caddy-generator </dev/null)
-        if [ $? -ne 0 ]; then
+        if ! (cd "$SCRIPT_DIR" && WAKEUP_PROXY=nginx docker compose run --rm caddy-generator </dev/null); then
             echo -e "${RED}❌ Failed to generate NGINX configurations${NC}"
             return 1
         fi
         install_nginx_confs
-    else
-        echo -e "${BLUE}Generating NGINX configuration files...${NC}"
-        cd "$SCRIPT_DIR/proxy-generator"
-        [ -d node_modules ] || npm install
-        # Run as the regular user — the generator uses sudo itself only for
-        # the symlink/reload steps, so conf files stay user-owned
-        npm run nginx
+        return
+    fi
 
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}✅ NGINX configurations generated successfully!${NC}"
-            echo -e "${YELLOW}Note: the confs rely on the wake proxy's host-based routing — if an older${NC}"
-            echo -e "${YELLOW}build of docker-wakeup is still running, restart it: sudo systemctl restart docker-wakeup${NC}"
-        else
-            echo -e "${RED}❌ Failed to generate NGINX configurations${NC}"
-            echo -e "${YELLOW}Please check your config.json file and try again${NC}"
-        fi
-        cd "$SCRIPT_DIR"
+    echo -e "${BLUE}Generating NGINX configuration files...${NC}"
+    # Run as the regular user — the generator uses sudo itself only for
+    # the symlink/reload steps, so conf files stay user-owned
+    if (cd "$SCRIPT_DIR/proxy-generator" && { [ -d node_modules ] || npm install; } && npm run nginx); then
+        echo -e "${GREEN}✅ NGINX configurations generated successfully!${NC}"
+        echo -e "${YELLOW}Note: the confs rely on the wake proxy's host-based routing — if an older${NC}"
+        echo -e "${YELLOW}build of docker-wakeup is still running, restart it: sudo systemctl restart docker-wakeup${NC}"
+    else
+        echo -e "${RED}❌ Failed to generate NGINX configurations${NC}"
+        echo -e "${YELLOW}Please check your config.json file and try again${NC}"
     fi
 }
 
@@ -286,13 +339,14 @@ install_nginx_confs() {
         echo -e "${YELLOW}$sites not found — copy proxy-generator/confs/ into your NGINX setup manually.${NC}"
         return 0
     fi
-    local SUDO="sudo"; [ -w "$sites" ] && SUDO=""
+    local -a privileged=()
+    [ -w "$sites" ] || privileged=(sudo)
     local f base
     for f in "$SCRIPT_DIR"/proxy-generator/confs/*.conf; do
         [ -e "$f" ] || continue
         base=$(basename "$f")
         [ "$base" = "example.conf" ] && continue
-        $SUDO ln -sf "$f" "$sites/$base"
+        "${privileged[@]}" ln -sf "$f" "$sites/$base"
     done
     echo -e "${GREEN}Symlinked confs into $sites${NC}"
     if [ -z "$NGINX_SITES_DIR" ]; then
@@ -306,7 +360,7 @@ install_nginx_confs() {
     fi
 }
 
-# Function to generate Caddy / caddy-docker-proxy configurations
+# Generate the Caddyfile (and, for Docker deployments, the labels override)
 generate_caddy_configs() {
     echo -e "${YELLOW}Generating Caddy configurations...${NC}"
     ensure_config || return 1
@@ -315,8 +369,7 @@ generate_caddy_configs() {
         # Full output (Caddyfile + labels override) via the one-shot container —
         # works without Node.js on the host, and the override is exactly what a
         # Docker deployment needs
-        (cd "$SCRIPT_DIR" && docker compose run --rm caddy-generator </dev/null)
-        if [ $? -eq 0 ]; then
+        if (cd "$SCRIPT_DIR" && docker compose run --rm caddy-generator </dev/null); then
             echo -e "${GREEN}✅ Caddy configuration generated (Caddyfile + docker-compose.override.yml)${NC}"
             print_caddy_next_steps
         else
@@ -325,38 +378,32 @@ generate_caddy_configs() {
         return
     fi
 
-    if [ -d "$SCRIPT_DIR/proxy-generator" ]; then
-        echo -e "${BLUE}Generating Caddy configuration files...${NC}"
-        cd "$SCRIPT_DIR/proxy-generator"
-        [ -d node_modules ] || npm install
-        # Nothing here needs sudo: the generator only writes files in
-        # proxy-generator/ — Caddy picks them up itself. This path runs the
-        # wake proxy via SystemD/PM2, so only the Caddyfile is needed (the
-        # compose labels override is for Docker deployments).
-        npm run caddy -- --caddyfile-only
-
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}✅ Caddy configuration generated: $SCRIPT_DIR/proxy-generator/Caddyfile${NC}"
-            cd "$SCRIPT_DIR"
-            print_caddy_next_steps
-        else
-            echo -e "${RED}❌ Failed to generate Caddy configurations${NC}"
-            echo -e "${YELLOW}Please check your config.json file and try again${NC}"
-        fi
-
-        cd "$SCRIPT_DIR"
-    else
+    if [ ! -d "$SCRIPT_DIR/proxy-generator" ]; then
         echo -e "${RED}Error: proxy-generator directory not found${NC}"
         return 1
+    fi
+
+    echo -e "${BLUE}Generating Caddy configuration files...${NC}"
+    # Nothing here needs sudo: the generator only writes files in
+    # proxy-generator/ — Caddy picks them up itself. This path runs the
+    # wake proxy via SystemD/PM2, so only the Caddyfile is needed (the
+    # compose labels override is for Docker deployments).
+    if (cd "$SCRIPT_DIR/proxy-generator" && { [ -d node_modules ] || npm install; } && npm run caddy -- --caddyfile-only); then
+        echo -e "${GREEN}✅ Caddy configuration generated: $SCRIPT_DIR/proxy-generator/Caddyfile${NC}"
+        print_caddy_next_steps
+    else
+        echo -e "${RED}❌ Failed to generate Caddy configurations${NC}"
+        echo -e "${YELLOW}Please check your config.json file and try again${NC}"
     fi
 }
 
 # Turn examples/caddy-docker-proxy.yml into a ready-to-run stack with the
-# generated Caddyfile already mounted (the two "B)" lines uncommented)
+# generated Caddyfile already mounted (the two "B)" lines uncommented).
+# Prints the path of the written file.
 write_caddy_stack() {
     local example="$SCRIPT_DIR/examples/caddy-docker-proxy.yml"
     local out="$SCRIPT_DIR/proxy-generator/caddy-stack.yml"
-    [ -f "$example" ] || { echo -e "${RED}$example not found${NC}"; return 1; }
+    [ -f "$example" ] || { echo -e "${RED}$example not found${NC}" >&2; return 1; }
     if [ "$DEPLOY_MODE" = "docker" ]; then
         # Docker deployment: the labels override feeds Caddy, no base Caddyfile
         {
@@ -383,11 +430,10 @@ write_caddy_stack() {
 # two cases need different things.
 print_caddy_next_steps() {
     local caddyfile="$SCRIPT_DIR/proxy-generator/Caddyfile"
-    local port
-    port=$(sed -n 's/.*"proxyPort"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$SCRIPT_DIR/config.json" | head -1)
-    port=${port:-8080}
+    local port have_caddy
+    port=$(config_proxy_port)
     echo ""
-    read -p "Do you already have Caddy / caddy-docker-proxy running on this machine? (y/N): " have_caddy || have_caddy=""
+    read -r -p "Do you already have Caddy / caddy-docker-proxy running on this machine? (y/N): " have_caddy || have_caddy=""
     echo ""
     if [[ "$have_caddy" =~ ^[Yy] ]]; then
         local subnet
@@ -407,7 +453,8 @@ print_caddy_next_steps() {
             echo "   If a firewall filters Docker → host traffic, allow port $port from your Caddy network"
             echo "   (ufw example: sudo ufw allow from ${subnet:-172.16.0.0/12} to any port $port proto tcp)."
         fi
-        local netname="bridge"; [ -n "$subnet" ] && netname="caddy"
+        local netname="bridge"
+        [ -n "$subnet" ] && netname="caddy"
         echo "   Self-test once the wake proxy runs — prints JSON when Caddy will be able to reach it:"
         echo "       docker run --rm --network $netname --add-host host.docker.internal:host-gateway alpine wget -qO- http://host.docker.internal:$port/healthz"
         echo "   (No firewall rule needed if your Caddy runs with network_mode: host — then map"
@@ -470,48 +517,19 @@ print_caddy_next_steps() {
     fi
 }
 
-# Run DockerWakeUp itself as a Docker container: generate configs (Node-free
-# via the one-shot container when needed), then build + start + health check
-setup_docker() {
-    echo -e "${YELLOW}Setting up the Docker deployment...${NC}"
-    if ! docker compose version >/dev/null 2>&1; then
-        echo -e "${RED}Error: docker compose not found — install Docker first (https://docs.docker.com/engine/install/)${NC}"
-        return 1
-    fi
-    ensure_config || return 1
-    generate_proxy_configs
-
-    echo -e "${YELLOW}Building and starting the docker-wakeup container...${NC}"
-    (cd "$SCRIPT_DIR" && docker compose up -d --build) || return 1
-
-    local port i
-    port=$(sed -n 's/.*"proxyPort"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$SCRIPT_DIR/config.json" | head -1)
-    port=${port:-8080}
-    for i in 1 2 3 4 5 6 7 8 9 10; do
-        curl -sf "http://127.0.0.1:$port/healthz" >/dev/null 2>&1 && break
-        sleep 2
-    done
-    if curl -sf "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
-        echo -e "${GREEN}✅ docker-wakeup container is running (wake proxy on port $port)${NC}"
-    else
-        echo -e "${RED}Container started but /healthz isn't answering yet — check: docker logs docker-wakeup${NC}"
-    fi
-    SERVICE_SETUP=docker
-}
-
-# Function to generate Traefik configuration (file provider)
+# Generate the Traefik file-provider configuration
 generate_traefik_configs() {
     echo -e "${YELLOW}Generating Traefik configuration...${NC}"
     ensure_config || return 1
 
     if [ "$DEPLOY_MODE" = "docker" ] && ! command -v npm >/dev/null 2>&1; then
-        (cd "$SCRIPT_DIR" && WAKEUP_PROXY=traefik docker compose run --rm caddy-generator </dev/null)
-        [ $? -eq 0 ] || { echo -e "${RED}❌ Failed to generate Traefik configuration${NC}"; return 1; }
-    else
-        cd "$SCRIPT_DIR/proxy-generator"
-        [ -d node_modules ] || npm install
-        npm run traefik || { echo -e "${RED}❌ Failed to generate Traefik configuration${NC}"; cd "$SCRIPT_DIR"; return 1; }
-        cd "$SCRIPT_DIR"
+        if ! (cd "$SCRIPT_DIR" && WAKEUP_PROXY=traefik docker compose run --rm caddy-generator </dev/null); then
+            echo -e "${RED}❌ Failed to generate Traefik configuration${NC}"
+            return 1
+        fi
+    elif ! (cd "$SCRIPT_DIR/proxy-generator" && { [ -d node_modules ] || npm install; } && npm run traefik); then
+        echo -e "${RED}❌ Failed to generate Traefik configuration${NC}"
+        return 1
     fi
     echo -e "${GREEN}✅ Traefik configuration generated: $SCRIPT_DIR/proxy-generator/traefik-dynamic.yml${NC}"
     print_traefik_next_steps
@@ -520,11 +538,10 @@ generate_traefik_configs() {
 # What's left to do by hand for Traefik — short enough to skip the README
 print_traefik_next_steps() {
     local dyn="$SCRIPT_DIR/proxy-generator/traefik-dynamic.yml"
-    local port
-    port=$(sed -n 's/.*"proxyPort"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$SCRIPT_DIR/config.json" | head -1)
-    port=${port:-8080}
+    local port have_traefik
+    port=$(config_proxy_port)
     echo ""
-    read -p "Do you already have Traefik running on this machine? (y/N): " have_traefik || have_traefik=""
+    read -r -p "Do you already have Traefik running on this machine? (y/N): " have_traefik || have_traefik=""
     echo ""
     if [[ "$have_traefik" =~ ^[Yy] ]]; then
         echo -e "${BLUE}Traefik is already running — here's what's left to do:${NC}"
@@ -574,16 +591,15 @@ print_traefik_next_steps() {
 }
 
 # Ask which reverse proxy fronts the wake proxy and generate its configs
-DEPLOY_MODE="host"
-PROXY_CHOICE="nginx"
 generate_proxy_configs() {
+    local proxy_choice
     echo ""
     echo "Which reverse proxy do you use in front of DockerWakeUp?"
     echo "1) NGINX (default)"
     echo "2) Caddy / caddy-docker-proxy"
     echo "3) Traefik"
     echo "4) Skip reverse proxy config generation"
-    read -p "Enter your choice (1-4) [1]: " proxy_choice
+    read -r -p "Enter your choice (1-4) [1]: " proxy_choice
     case "${proxy_choice:-1}" in
         1) PROXY_CHOICE="nginx"; generate_nginx_configs ;;
         2) PROXY_CHOICE="caddy"; generate_caddy_configs ;;
@@ -593,129 +609,161 @@ generate_proxy_configs() {
     esac
 }
 
+# ---------------------------------------------------------------------------
+# The menu
+# ---------------------------------------------------------------------------
 
-# --- Git update check before menu ---
-CANONICAL_REMOTE="https://github.com/jelliott2021/DockerWakeUp.git"
-GIT_UPDATE_OPTION=""
-GIT_UP_TO_DATE=true
-if [ -d "$SCRIPT_DIR/.git" ]; then
-    git fetch "$CANONICAL_REMOTE" HEAD:refs/remotes/origin-upstream 2>/dev/null
-    LOCAL=$(git rev-parse HEAD)
-    REMOTE=$(git rev-parse refs/remotes/origin-upstream)
-    BASE=$(git merge-base HEAD refs/remotes/origin-upstream)
-    if [ "$LOCAL" = "$REMOTE" ]; then
-        echo -e "${GREEN}You are already on the latest version of the code.${NC}"
-    elif [ "$LOCAL" = "$BASE" ]; then
-        echo -e "${YELLOW}Your local code is behind the canonical remote. You should update to the latest version!${NC}"
-        GIT_UPDATE_OPTION=1
-        GIT_UP_TO_DATE=false
-    elif [ "$REMOTE" = "$BASE" ]; then
-        echo -e "${YELLOW}Your local code is ahead of the canonical remote. (Local changes not pushed)${NC}"
+# Report the git status computed by git_update_status. Prints "1" when an
+# update should be offered as a menu option.
+print_git_status() {
+    case "$GIT_STATUS" in
+        latest)
+            echo -e "${GREEN}You are already on the latest version of the code.${NC}" >&2
+            ;;
+        behind)
+            echo -e "${YELLOW}Your local code is behind the canonical remote. You should update to the latest version!${NC}" >&2
+            echo 1
+            ;;
+        ahead)
+            echo -e "${YELLOW}Your local code is ahead of the canonical remote. (Local changes not pushed)${NC}" >&2
+            ;;
+        diverged)
+            echo -e "${RED}Your local and canonical remote branches have diverged. Please resolve manually.${NC}" >&2
+            echo 1
+            ;;
+        offline)
+            echo -e "${YELLOW}Could not reach GitHub to check for updates — continuing with the local code.${NC}" >&2
+            ;;
+    esac
+}
+
+# The "what to do now" summary printed after a successful menu action
+print_next_steps() {
+    local service_hint
+    echo ""
+    echo -e "${GREEN}Setup completed!${NC}"
+    echo -e "${YELLOW}Next steps:${NC}"
+    if [ "$SERVICE_SETUP" = "docker" ]; then
+        service_hint="The docker-wakeup container is running — manage it with docker compose"
+    elif [ -n "$SERVICE_SETUP" ]; then
+        service_hint="Your wake-proxy service should now be running!"
     else
-        echo -e "${RED}Your local and canonical remote branches have diverged. Please resolve manually.${NC}"
-        GIT_UPDATE_OPTION=1
-        GIT_UP_TO_DATE=false
+        service_hint="Start the wake proxy: re-run this script with option 1 or 2 (or: cd wake-proxy && npm start)"
     fi
-fi
 
-echo "How do you want to run DockerWakeUp?"
-echo "1) Docker container + reverse proxy configs (easiest — no Node.js needed)"
-echo "2) SystemD service + reverse proxy configs (runs on the host via Node.js)"
-echo "3) PM2 process manager + reverse proxy configs"
-echo "4) Generate reverse proxy configs only (NGINX, Caddy or Traefik)"
-echo "5) Build project only (no service setup)"
-echo "6) Exit"
-if [ "$GIT_UPDATE_OPTION" = "1" ]; then
-    echo "7) Update to latest version from GitHub"
-    echo ""
-    read -p "Enter your choice (1-7): " choice
-else
-    echo ""
-    read -p "Enter your choice (1-6): " choice
-fi
+    if [ ! -f "$SCRIPT_DIR/config.json" ] || { [ -f "$SCRIPT_DIR/config.json.example" ] && cmp -s "$SCRIPT_DIR/config.json" "$SCRIPT_DIR/config.json.example"; }; then
+        echo "1. ⚠️  IMPORTANT: Edit config.json with your actual service details"
+        if [ "$PROXY_CHOICE" = "caddy" ]; then
+            echo "2. Re-run the script or manually regenerate: cd proxy-generator && npm run caddy   (or npm run traefik)"
+            echo "3. Follow the steps printed above"
+        else
+            echo "2. Re-run the script or manually generate NGINX configs: cd proxy-generator && npm run nginx"
+            echo "   (the generator symlinks and reloads NGINX by itself)"
+        fi
+    elif [ "$PROXY_CHOICE" = "caddy" ]; then
+        echo "1. ✅ Caddy configuration generated: proxy-generator/Caddyfile"
+        echo "2. Follow the Caddy steps printed above (details: README → Caddy Generator)"
+        echo "3. $service_hint"
+    elif [ "$PROXY_CHOICE" = "traefik" ]; then
+        echo "1. ✅ Traefik configuration generated: proxy-generator/traefik-dynamic.yml"
+        echo "2. Follow the Traefik steps printed above"
+        echo "3. $service_hint"
+    elif [ "$PROXY_CHOICE" = "none" ]; then
+        echo "1. ⏭️  Reverse proxy config generation was skipped"
+        echo "2. Generate later with: cd proxy-generator && npm run nginx  (or npm run caddy)"
+        echo "3. $service_hint"
+    else
+        echo "1. ✅ NGINX configurations generated, symlinked and NGINX reloaded"
+        echo "2. Nothing else to do for routing — set up SSL once if you haven't (see README)"
+        echo "3. $service_hint"
+    fi
 
-case $choice in
-    1)
-        DEPLOY_MODE="docker"
-        setup_docker
-        ;;
-    2)
-        build_project
-        generate_proxy_configs
-        setup_systemd
-        SERVICE_SETUP=1
-        ;;
-    3)
-        build_project
-        generate_proxy_configs
-        setup_pm2
-        SERVICE_SETUP=1
-        ;;
-    4)
-        generate_proxy_configs
-        ;;
-    5)
-        build_project
-        ;;
-    6)
-        echo -e "${GREEN}Exiting...${NC}"
-        exit 0
-        ;;
-    7)
-        update_from_git
-        ;;
-    *)
-        echo -e "${RED}Invalid choice. Please run the script again.${NC}"
+    echo ""
+    echo -e "${BLUE}Useful commands:${NC}"
+    if [ "$SERVICE_SETUP" = "docker" ]; then
+        echo "• Check status: docker compose ps"
+        echo "• View logs: docker logs -f docker-wakeup"
+        echo "• Apply config/code changes: docker compose up -d --build"
+    else
+        echo "• Check service status: sudo systemctl status docker-wakeup"
+        echo "• View logs: sudo journalctl -u docker-wakeup -f"
+        echo "• Restart service: sudo systemctl restart docker-wakeup"
+    fi
+}
+
+main() {
+    set -e
+
+    echo -e "${BLUE}Docker Wake-Up Service Setup${NC}"
+    echo "================================"
+
+    # Don't run as root for systemd setup — sudo is used where needed
+    if is_root && [[ "$1" != "--pm2" ]]; then
+        echo -e "${RED}Error: Don't run this script as root for systemd setup${NC}"
+        echo "Run as your regular user, we'll use sudo when needed"
         exit 1
-        ;;
-esac
-
-echo ""
-echo -e "${GREEN}Setup completed!${NC}"
-echo -e "${YELLOW}Next steps:${NC}"
-if [ "$SERVICE_SETUP" = "docker" ]; then
-    SERVICE_HINT="The docker-wakeup container is running — manage it with docker compose"
-elif [ -n "$SERVICE_SETUP" ]; then
-    SERVICE_HINT="Your wake-proxy service should now be running!"
-else
-    SERVICE_HINT="Start the wake proxy: re-run this script with option 1 or 2 (or: cd wake-proxy && npm start)"
-fi
-
-if [ ! -f "$SCRIPT_DIR/config.json" ] || [ -f "$SCRIPT_DIR/config.json.example" ] && cmp -s "$SCRIPT_DIR/config.json" "$SCRIPT_DIR/config.json.example"; then
-    echo "1. ⚠️  IMPORTANT: Edit config.json with your actual service details"
-    if [ "$PROXY_CHOICE" = "caddy" ]; then
-        echo "2. Re-run the script or manually regenerate: cd proxy-generator && npm run caddy   (or npm run traefik)"
-        echo "3. Follow the steps printed above"
-    else
-        echo "2. Re-run the script or manually generate NGINX configs: cd proxy-generator && npm run nginx"
-        echo "   (the generator symlinks and reloads NGINX by itself)"
     fi
-elif [ "$PROXY_CHOICE" = "caddy" ]; then
-    echo "1. ✅ Caddy configuration generated: proxy-generator/Caddyfile"
-    echo "2. Follow the Caddy steps printed above (details: README → Caddy Generator)"
-    echo "3. $SERVICE_HINT"
-elif [ "$PROXY_CHOICE" = "traefik" ]; then
-    echo "1. ✅ Traefik configuration generated: proxy-generator/traefik-dynamic.yml"
-    echo "2. Follow the Traefik steps printed above"
-    echo "3. $SERVICE_HINT"
-elif [ "$PROXY_CHOICE" = "none" ]; then
-    echo "1. ⏭️  Reverse proxy config generation was skipped"
-    echo "2. Generate later with: cd proxy-generator && npm run nginx  (or npm run caddy)"
-    echo "3. $SERVICE_HINT"
-else
-    echo "1. ✅ NGINX configurations generated, symlinked and NGINX reloaded"
-    echo "2. Nothing else to do for routing — set up SSL once if you haven't (see README)"
-    echo "3. $SERVICE_HINT"
-fi
 
-echo ""
-echo -e "${BLUE}Useful commands:${NC}"
-if [ "$SERVICE_SETUP" = "docker" ]; then
-    echo "• Check status: docker compose ps"
-    echo "• View logs: docker logs -f docker-wakeup"
-    echo "• Apply config/code changes: docker compose up -d --build"
-else
-    echo "• Check service status: sudo systemctl status docker-wakeup"
-    echo "• View logs: sudo journalctl -u docker-wakeup -f"
-    echo "• Restart service: sudo systemctl restart docker-wakeup"
+    git_update_status
+    local git_update_option choice
+    git_update_option=$(print_git_status)
+
+    echo "How do you want to run DockerWakeUp?"
+    echo "1) Docker container + reverse proxy configs (easiest — no Node.js needed)"
+    echo "2) SystemD service + reverse proxy configs (runs on the host via Node.js)"
+    echo "3) PM2 process manager + reverse proxy configs"
+    echo "4) Generate reverse proxy configs only (NGINX, Caddy or Traefik)"
+    echo "5) Build project only (no service setup)"
+    echo "6) Exit"
+    if [ "$git_update_option" = "1" ]; then
+        echo "7) Update to latest version from GitHub"
+        echo ""
+        read -r -p "Enter your choice (1-7): " choice
+    else
+        echo ""
+        read -r -p "Enter your choice (1-6): " choice
+    fi
+
+    case "$choice" in
+        1)
+            DEPLOY_MODE="docker"
+            setup_docker
+            ;;
+        2)
+            build_project
+            generate_proxy_configs
+            setup_systemd
+            SERVICE_SETUP=1
+            ;;
+        3)
+            build_project
+            generate_proxy_configs
+            setup_pm2
+            SERVICE_SETUP=1
+            ;;
+        4)
+            generate_proxy_configs
+            ;;
+        5)
+            build_project
+            ;;
+        6)
+            echo -e "${GREEN}Exiting...${NC}"
+            exit 0
+            ;;
+        7)
+            update_from_git
+            ;;
+        *)
+            echo -e "${RED}Invalid choice. Please run the script again.${NC}"
+            exit 1
+            ;;
+    esac
+
+    print_next_steps
+}
+
+# Run the menu only when executed, not when sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
 fi
