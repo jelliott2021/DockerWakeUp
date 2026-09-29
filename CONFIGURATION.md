@@ -50,6 +50,14 @@ loaded (full detail is only returned to local requests).
       "composeDir": "/home/youruser/minecraft"
     },
     {
+      "route": "vpn",
+      "type": "udp",
+      "listenPort": 51820,
+      "target": "127.0.0.1:51830",
+      "composeDir": "/home/youruser/wireguard",
+      "idleThreshold": 1800
+    },
+    {
       "route": "myapp",
       "target": "http://localhost:3000",
       "startCommand": "nohup node server.js >> app.log 2>&1 &",
@@ -80,12 +88,14 @@ loaded (full detail is only returned to local requests).
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `route` | string | *required* | The service's name and subdomain: `jellyfin` → `jellyfin.<domain>`. Letters, digits and dashes only (validated at startup). Also used for the `/proxy/<route>/…` path form and the idle-timer files. |
-| `target` | string | *required* | Where the service listens once awake — `http://localhost:8096` for HTTP, `host:port` for `"type": "tcp"`. Must be reachable from the wake proxy (publish container ports on the host, `127.0.0.1:` bindings are fine). |
+| `target` | string | *required* | Where the service listens once awake — `http://localhost:8096` for HTTP, `host:port` for `"type": "tcp"` and `"type": "udp"`. Must be reachable from the wake proxy (publish container ports on the host, `127.0.0.1:` bindings are fine). |
 | `composeDir` | string (path) | — | Directory containing the service's `docker-compose.yml`. Waking runs `docker compose up -d` here; idle shutdown runs `docker compose stop`. Optional when `startCommand` fully replaces Docker. Docker deployments of DockerWakeUp must be able to see this path inside the container at the same location (the default home-directory mount usually covers it). |
 | `domains` | string[] | `[]` | Extra hostnames that also resolve to this service, e.g. `["jf.example.org"]`. Add them to your reverse proxy / DNS too — the generators include them automatically. |
-| `type` | `"http"` \| `"tcp"` | `"http"` | `"tcp"` proxies raw bytes with wake-on-connect (game servers, databases). TCP services bypass the HTTP reverse proxy entirely — the generators skip them. |
-| `listenPort` | number | — | **TCP only, required**: port the wake proxy listens on for clients. Point port forwarding/DNS here; must differ from the service's own port in `target`. |
+| `type` | `"http"` \| `"tcp"` \| `"udp"` | `"http"` | `"tcp"` and `"udp"` relay raw traffic with wake-on-connect (game servers, databases, VPNs). They bypass the HTTP reverse proxy entirely, and the generators skip them. See [TCP and UDP services](#tcp-and-udp-services). |
+| `listenPort` | number | — | **TCP/UDP only, required**: port the wake proxy listens on for clients. Point port forwarding/DNS here. It must differ from the service's own port in `target`: publish the service on another port, e.g. `127.0.0.1:51830`. |
 | `autoOff` | boolean | `true` | Set `false` to exempt this service from idle shutdown (it still wakes on demand, it just never gets stopped). |
+| `idleThreshold` | number (seconds) | global `idleThreshold` | Per-service idle limit, overriding the global one. Setting it on a service enables idle shutdown for that service even when the global option is unset. Services sharing a `composeDir` are stopped together, and only once all of them are idle. |
+| `activityCommand` | string | — | Command printing Unix timestamps (seconds) of activity the proxy can't see, such as a background job or sessions that bypass it. It runs only once the proxy's own clock says the service is idle; if the newest timestamp is inside the limit, the service is kept. It runs via `/bin/sh -c` in `composeDir`. A failure counts as "no activity". |
 | `wakePage` | string (path) | global `wakePage` | Per-service startup page, overrides the global one. |
 | `showLogs` | boolean | `false` | **Opt-in**: set `true` to stream the container's logs on the startup page while it wakes. Off by default because anyone who can reach the URL can read the stream, and boot logs often contain config details. (Streaming is only ever possible during a wake — running and sleeping services never stream logs.) |
 | `startCommand` | string | — | Hook run **before** `docker compose up -d` when waking. Without a `composeDir` it *is* the start command (non-Docker services). |
@@ -125,15 +135,67 @@ Notify a Discord webhook on wake (same idea works for `stopCommand`).
 Run a service that isn't managed by Docker at all — with no `composeDir`, the
 hooks *are* the start/stop, and the wake page tails the app's own log file.
 
-## TCP services
+## TCP and UDP services
 
-Services that don't speak HTTP can't go through the HTTP proxy — set
-`"type": "tcp"` and a `listenPort`. The wake proxy listens on `listenPort` and
-forwards raw bytes to `target`. When a client connects while the service is
-stopped, the proxy starts it, holds the connection until the target port opens
-(up to 90s), then connects through — a Minecraft client's first join attempt
-wakes the server (clients that time out simply retry). Active connections keep
-the service marked as in-use for idle shutdown.
+Services that don't speak HTTP can't go through the HTTP proxy. Set
+`"type": "tcp"` or `"type": "udp"` and a `listenPort`: the wake proxy listens
+on `listenPort` and relays traffic to `target`, which is the service's own
+port, published somewhere else (usually `127.0.0.1:<other port>`).
+
+**TCP.** When a client connects while the service is stopped, the proxy
+starts it, holds the connection until the target port opens (up to 90s), then
+connects through. A Minecraft client's first join attempt wakes the server, and
+clients that time out simply retry. Active connections keep the service marked
+as in use for idle shutdown.
+
+**UDP.** Each client (address and port) gets its own relay socket towards the
+target, so replies find their way back. How it behaves:
+
+- **Waking:** when a new client appears and the target is down, the proxy wakes
+  the service. That client's datagrams are queued (up to 64) and delivered in
+  order once the target is up. After 90 seconds without the service coming up,
+  the client is dropped, and its next datagram tries again.
+- **Readiness:** UDP has no handshake. The proxy sends an empty datagram and
+  treats ICMP "port unreachable" as "not up yet". That works for targets on
+  the same host or LAN, which is where they normally are.
+- **Idle shutdown:** every datagram in either direction counts as activity.
+  A client that has been silent for 3 minutes is forgotten.
+- **Service restarts:** if the service stops while a client is still known (for
+  example after idle shutdown), the next datagram hits "port unreachable". The
+  client is dropped, and the datagram after that wakes the service again. UDP
+  protocols that retry on their own recover within a few seconds.
+
+The service sees every client as coming from the proxy's address.
+Everything runs through the wake proxy process, which is plenty for game
+servers, voice and a personal VPN. For multi-gigabit traffic, run the service
+always-on instead (`"autoOff": false`).
+
+A service with both a web UI and a UDP port (a VPN like wg-easy) is two
+entries sharing a `composeDir`. They wake the same stack, and idle shutdown
+stops it only once both are idle:
+
+```json
+{
+  "route": "wireguard",
+  "target": "http://localhost:51821",
+  "composeDir": "/home/me/vpn",
+  "idleThreshold": 1800
+},
+{
+  "route": "vpn",
+  "type": "udp",
+  "listenPort": 51820,
+  "target": "127.0.0.1:51830",
+  "composeDir": "/home/me/vpn",
+  "idleThreshold": 1800
+}
+```
+
+In the compose file, the container's WireGuard port is published only for the
+proxy (`"127.0.0.1:51830:51820/udp"`), and the port clients use is
+`listenPort`. For wg-easy that means keeping `WG_PORT=51820`, so generated
+client configs point at the proxy. Forward `listenPort` on your router and
+allow it in the host firewall, because the proxy's socket is a normal host socket.
 
 ## Custom wake pages
 

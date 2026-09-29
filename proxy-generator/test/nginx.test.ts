@@ -168,9 +168,20 @@ describe("generateNginx", () => {
     expect(read(conf("jellyfin"))).toContain("proxy_pass http://127.0.0.1:9090;");
   });
 
-  it("writes no conf for tcp services", () => {
-    run({}, { ...config, services: [...services, { route: "mc", target: "x:1", type: "tcp" }] });
+  it("writes no conf for tcp or udp services", () => {
+    run(
+      {},
+      {
+        ...config,
+        services: [
+          ...services,
+          { route: "mc", target: "x:1", type: "tcp" },
+          { route: "vpn", target: "x:1", type: "udp" },
+        ],
+      },
+    );
     expect(fs.existsSync(conf("mc"))).toBe(false);
+    expect(fs.existsSync(conf("vpn"))).toBe(false);
     expect(commands()).toEqual([ln("jellyfin"), ln("photos")]);
   });
 

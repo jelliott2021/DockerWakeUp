@@ -33,16 +33,17 @@ Two independent packages:
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `wake-proxy.ts`    | Entry point (`node dist/wake-proxy.js`): load the config, start the server, log unhandled rejections instead of crashing            |
 | `config.ts`        | Config types, `loadConfig`, and `indexServices` (validation: route names, targets, TCP listen ports; invalid entries are skipped)   |
-| `server.ts`        | Process wiring: HTTP listener, one TCP listener per TCP service, the idle checker and the update checker; `close()` for tests        |
+| `server.ts`        | Process wiring: HTTP listener, one TCP/UDP listener per TCP/UDP service, the idle checker and the update checker; `close()` for tests |
 | `app.ts`           | The Express app: `/healthz`, the wake endpoints, one proxy per HTTP service, and the WebSocket `upgrade` handler                     |
 | `routing.ts`       | Hostname → route resolution (`<route>.<domain>`, `domains` aliases, first-label fallback) and the `/proxy/<route>` prefix           |
 | `proxy.ts`         | The http-proxy-middleware instance per service, and `handleProxyError`: what happens when the backend does not answer                |
 | `wakeEndpoints.ts` | `__wake/status` (JSON readiness poll) and `__wake/logs` (Server-Sent Events)                                                          |
 | `wakePage.ts`      | The built-in "starting up" page (HTML + inline script) and custom page loading                                                       |
 | `wakeManager.ts`   | The wake state machine, `docker compose up -d` (with container-conflict recovery), hooks, readiness probes, startup-log streaming     |
-| `idleShutdown.ts`  | The periodic idle check, `docker compose stop` and the `stopCommand` hook                                                            |
+| `idleShutdown.ts`  | The periodic idle check (per-service thresholds, `activityCommand`), `docker compose stop` and the `stopCommand` hook                |
 | `lastAccess.ts`    | State on disk: last-access timestamps (write-throttled) and the wake-duration history behind the "usually ready in ~Xs" estimate     |
 | `tcpProxy.ts`      | Wake-on-connect for `"type": "tcp"` services                                                                                         |
+| `udpProxy.ts`      | Wake-on-datagram relay for `"type": "udp"` services                                                                                  |
 | `updateChecker.ts` | The daily comparison of the local commit with GitHub                                                                                 |
 | `shell.ts`         | Promise wrappers around `child_process` (`runShell` for command lines, `runFile` for argument lists)                                 |
 | `util.ts`          | `errorMessage`, `sleep`                                                                                                              |
@@ -99,10 +100,14 @@ wake.
 ### Idle shutdown (`idleShutdown.ts`)
 
 Every five minutes, every service that is not exempt (`autoOff: false`) and
-not mid-wake is compared against `idleThreshold`. Idle services get
+not mid-wake is compared against its `idleThreshold` (its own, or the global
+one). When the proxy's clock says idle and the service has an
+`activityCommand`, that command gets the last word: a recent enough timestamp
+in its output keeps the service and moves its idle clock. Idle services get
 `docker compose stop` followed by the `stopCommand` hook (or only the hook
-without a `composeDir`). Without a positive `idleThreshold` the checker is
-disabled. Timestamps live on disk so they survive restarts; writes are
+without a `composeDir`). The checker is
+disabled only when there is no positive threshold at all, neither global nor
+per service. Timestamps live on disk so they survive restarts; writes are
 throttled to one per ten seconds per service because busy services produce
 many successful responses per second.
 
@@ -112,6 +117,22 @@ A `"type": "tcp"` service gets its own listener on `listenPort`. A connection
 while the backend port is closed triggers the wake and is held for up to 90
 seconds until the port opens, then bytes are piped both ways. Active sessions
 refresh the idle timestamp once a minute.
+
+### UDP services (`udpProxy.ts`)
+
+A `"type": "udp"` service gets its own socket on `listenPort`. Every client
+(address + port) gets a connected upstream socket towards the target. A new
+client probes the target: `isUdpReady` sends an empty datagram, and ICMP
+"port unreachable" surfaces as a socket error. If the target is down, the
+client triggers the wake, and its datagrams are queued until the probe
+succeeds (or the 90-second wake timeout drops the client). "Port unreachable"
+on an established client means the service went away, so the client is
+dropped and its next datagram wakes the service. Clients silent for 3 minutes
+are swept. Datagrams in either direction refresh the idle timestamp.
+
+Idle shutdown groups services by `composeDir`: a stack is stopped only when
+all of its services are idle, so a web UI and a UDP port of one container
+behave as one.
 
 ## The generator (`proxy-generator/src`)
 

@@ -2,6 +2,7 @@
  * Shared test utilities: temp state directories, throwaway HTTP backends and
  * free ports.
  */
+import dgram from "dgram";
 import fs from "fs";
 import http from "http";
 import net from "net";
@@ -56,6 +57,18 @@ export function getFreePort(): Promise<number> {
     srv.listen(0, "127.0.0.1", () => {
       const { port } = srv.address() as net.AddressInfo;
       srv.close(() => resolve(port));
+    });
+  });
+}
+
+/** A UDP port nothing is bound to right now (on both IPv4 and IPv6 wildcard). */
+export function getFreeUdpPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const sock = dgram.createSocket({ type: "udp6", ipv6Only: false });
+    sock.on("error", reject);
+    sock.bind(0, "::", () => {
+      const { port } = sock.address();
+      sock.close(() => resolve(port));
     });
   });
 }

@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **UDP services** (`"type": "udp"` with a `listenPort`): wake-on-datagram for
+  game servers, VPNs, voice and other UDP services, mirroring the TCP support.
+  Each client gets its own relay socket. A client's datagrams are queued
+  during a wake and delivered in order. Traffic in both directions counts as
+  activity for idle shutdown. See CONFIGURATION.md, "TCP and UDP services".
+- Per-service `idleThreshold`, overriding the global one. It also works when
+  the global option is unset.
+- `activityCommand`: lets idle shutdown see activity that never passes through
+  the proxy. It prints Unix timestamps, and the newest one counts.
+
+### Changed
+
+- Services sharing a `composeDir` are stopped together, and only once every
+  one of them is idle. A stack's web UI going quiet no longer stops a stack
+  whose TCP/UDP side is still in use.
+
 ## 2026-09-17
 
 ### Changed

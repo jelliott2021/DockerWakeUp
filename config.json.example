@@ -29,6 +29,14 @@
       "composeDir": "/home/youruser/minecraft"
     },
     {
+      "route": "vpn",
+      "type": "udp",
+      "listenPort": 51820,
+      "target": "127.0.0.1:51830",
+      "composeDir": "/home/youruser/wireguard",
+      "idleThreshold": 1800
+    },
+    {
       "route": "myapp",
       "domains": ["myapp.example.net"],
       "target": "http://localhost:3000",

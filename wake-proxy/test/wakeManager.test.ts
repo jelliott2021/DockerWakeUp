@@ -1,4 +1,5 @@
 import childProcess from "child_process";
+import dgram from "dgram";
 import { EventEmitter } from "events";
 import fs from "fs";
 import net from "net";
@@ -13,6 +14,7 @@ import {
   isHttpReady,
   isServiceReady,
   isTcpReady,
+  isUdpReady,
   parseHostPort,
   resetWakeStatuses,
   streamServiceLogs,
@@ -22,6 +24,7 @@ import {
 import { getLastAccess, getWakeDurations, recordWakeDuration } from "../src/lastAccess";
 import {
   getFreePort,
+  getFreeUdpPort,
   makeTempDir,
   mockConsole,
   realSleep,
@@ -57,10 +60,27 @@ beforeEach(() => {
 });
 afterEach(() => fs.rmSync(composeDir, { recursive: true, force: true }));
 
+/** A UDP socket bound to a free port on the given address. */
+function bindUdp(
+  type: "udp4" | "udp6",
+  address: string,
+): Promise<{ port: number; close: () => Promise<void> }> {
+  return new Promise((resolve) => {
+    const sock = dgram.createSocket(type);
+    sock.bind(0, address, () =>
+      resolve({
+        port: sock.address().port,
+        close: () => new Promise<void>((done) => sock.close(() => done())),
+      }),
+    );
+  });
+}
+
 describe("parseHostPort", () => {
   it("accepts host:port with an optional scheme and path", () => {
     expect(parseHostPort("localhost:25565")).toEqual({ host: "localhost", port: 25565 });
     expect(parseHostPort("tcp://db.internal:5432")).toEqual({ host: "db.internal", port: 5432 });
+    expect(parseHostPort("udp://127.0.0.1:51830")).toEqual({ host: "127.0.0.1", port: 51830 });
     expect(parseHostPort("http://127.0.0.1:8096/health")).toEqual({
       host: "127.0.0.1",
       port: 8096,
@@ -114,6 +134,21 @@ describe("readiness probes", () => {
     expect(await isServiceReady({ target: `127.0.0.1:${await getFreePort()}`, type: "tcp" })).toBe(
       false,
     );
+    const udp = await bindUdp("udp4", "127.0.0.1");
+    expect(await isServiceReady({ target: `127.0.0.1:${udp.port}`, type: "udp" })).toBe(true);
+    await udp.close();
+  });
+
+  it("isUdpReady tells a bound UDP port from a closed one, on IPv4 and IPv6", async () => {
+    const v4 = await bindUdp("udp4", "127.0.0.1");
+    expect(await isUdpReady("127.0.0.1", v4.port)).toBe(true);
+    await v4.close();
+    expect(await isUdpReady("127.0.0.1", await getFreeUdpPort())).toBe(false);
+
+    const v6 = await bindUdp("udp6", "::1");
+    expect(await isUdpReady("::1", v6.port, 100)).toBe(true);
+    await v6.close();
+    expect(await isUdpReady("::1", await getFreeUdpPort())).toBe(false);
   });
 
   it("waitForReady resolves once ready and rejects after the timeout", async () => {

@@ -9,6 +9,7 @@ const services: ServiceMap = {
     domains: ["Photos.example.org", "pics.example.net"],
   },
   minecraft: { route: "minecraft", target: "localhost:25565", type: "tcp", listenPort: 25566 },
+  vpn: { route: "vpn", target: "localhost:51830", type: "udp", listenPort: 51820 },
 };
 
 const req = (headers: Record<string, string | string[] | undefined>, url?: string) => ({
@@ -19,7 +20,7 @@ const req = (headers: Record<string, string | string[] | undefined>, url?: strin
 describe("createHostRouter", () => {
   const router = createHostRouter(services, "Example.com");
 
-  it("maps <route>.<domain> and aliases (lowercased) to routes, skipping tcp services", () => {
+  it("maps <route>.<domain> and aliases (lowercased) to routes, skipping tcp and udp services", () => {
     expect(router.hosts).toEqual({
       "jellyfin.example.com": "jellyfin",
       "photos.example.com": "photos",
@@ -64,8 +65,10 @@ describe("createHostRouter", () => {
       expect(router.routeForHost(req({ host: "jellyfin" }))).toBe("jellyfin");
     });
 
-    it("never routes to tcp services by hostname", () => {
+    it("never routes to tcp or udp services by hostname", () => {
       expect(router.routeForHost(req({ host: "minecraft.example.com" }))).toBeNull();
+      expect(router.routeForHost(req({ host: "vpn.example.com" }))).toBeNull();
+      expect(router.routeForHost(req({ host: "vpn" }))).toBeNull();
     });
 
     it("returns null for unknown or missing hostnames", () => {

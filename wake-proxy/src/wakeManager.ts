@@ -3,6 +3,7 @@
  * streaming. Wake state is kept in memory per route.
  */
 import { spawn } from "child_process";
+import dgram from "dgram";
 import fs from "fs";
 import net from "net";
 import path from "path";
@@ -24,7 +25,7 @@ export interface WakeStatus {
 export interface WakeTarget {
   target: string;
   composeDir?: string;
-  type?: "http" | "tcp";
+  type?: "http" | "tcp" | "udp";
   /** Pre-start hook run before `docker compose up -d`, or the whole start when there is no composeDir */
   startCommand?: string;
 }
@@ -256,18 +257,18 @@ export function streamServiceLogs(
   return stop;
 }
 
-/** Parse `host:port`, `tcp://host:port` or `http://host:port` into its parts. */
+/** Parse `host:port`, `tcp://host:port`, `udp://host:port` or `http://host:port` into its parts. */
 export function parseHostPort(target: string): { host: string; port: number } {
-  const cleaned = target.replace(/^(tcp|https?):\/\//, "").replace(/\/.*$/, "");
+  const cleaned = target.replace(/^(tcp|udp|https?):\/\//, "").replace(/\/.*$/, "");
   const [host, portStr] = cleaned.split(":");
   return { host: host || "localhost", port: parseInt(portStr, 10) };
 }
 
-/** Single quick probe of a service's target, HTTP or TCP depending on its type. */
+/** Single quick probe of a service's target, HTTP, TCP or UDP depending on its type. */
 export async function isServiceReady(svc: { target: string; type?: string }): Promise<boolean> {
-  if (svc.type === "tcp") {
+  if (svc.type === "tcp" || svc.type === "udp") {
     const { host, port } = parseHostPort(svc.target);
-    return isTcpReady(host, port);
+    return svc.type === "tcp" ? isTcpReady(host, port) : isUdpReady(host, port);
   }
   return isHttpReady(svc.target);
 }
@@ -297,6 +298,29 @@ export function isTcpReady(host: string, port: number, timeoutMs: number = 1500)
     sock.once("connect", () => done(true));
     sock.once("timeout", () => done(false));
     sock.once("error", () => done(false));
+  });
+}
+
+/**
+ * `true` when something is bound to host:port over UDP. UDP has no handshake,
+ * so this sends one empty datagram on a connected socket: a closed port
+ * answers with ICMP "port unreachable", which surfaces as a socket error.
+ * Silence counts as ready. That is only reliable for targets on this host or
+ * the local network, where nothing filters the ICMP reply, which is where wake
+ * proxy targets live. Empty datagrams are ignored by real UDP services.
+ */
+export function isUdpReady(host: string, port: number, timeoutMs: number = 300): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = dgram.createSocket(host.includes(":") ? "udp6" : "udp4");
+    // Settles once: closing the socket ends its events, clearing the timer the timeout
+    const done = (ok: boolean) => {
+      clearTimeout(timer);
+      sock.close();
+      resolve(ok);
+    };
+    const timer = setTimeout(() => done(true), timeoutMs);
+    sock.on("error", () => done(false));
+    sock.connect(port, host, () => sock.send(Buffer.alloc(0)));
   });
 }
 

@@ -8,7 +8,7 @@ import type http from "http";
 import type net from "net";
 import type { Duplex } from "stream";
 
-import { type Config, type ServiceMap } from "./config";
+import { type Config, isHttpService, type ServiceMap } from "./config";
 import { createHostRouter, type HostRouter } from "./routing";
 import { createServiceProxy, type ProxyMiddleware } from "./proxy";
 import { getUpdateInfo } from "./updateChecker";
@@ -79,7 +79,7 @@ export function createApp(config: Config, services: ServiceMap): WakeProxyApp {
   });
 
   for (const [route, svc] of Object.entries(services)) {
-    if (svc.type === "tcp") continue; // TCP services have their own listener
+    if (!isHttpService(svc)) continue; // TCP/UDP services have their own listeners
     proxies[route] = createServiceProxy(route, svc, config);
     app.use(`/proxy/${route}`, proxies[route]);
   }

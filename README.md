@@ -11,7 +11,7 @@
 - **Caddy support** — generate a Caddyfile or caddy-docker-proxy labels instead of NGINX configs (see [Caddy / caddy-docker-proxy](#3-caddy-generator-proxy-generator))
 - **One generator** — `proxy-generator/` replaces `nginx-generator/` (existing confs and hand edits are migrated automatically)
 - **Live startup page** — streams the waking container's logs in the browser and auto-reloads when the service is ready; bring your own page with `wakePage`
-- **TCP wake-on-connect** — game servers like Minecraft wake when a player connects
+- **TCP & UDP wake-on-connect** — game servers, VPNs and other non-HTTP services wake when a client connects
 - **Start/stop hooks & non-Docker services** — run your own commands around wake/sleep, or replace Docker Compose entirely
 - **Docker deployment** — run DockerWakeUp itself with one `docker compose up -d --build`
 
@@ -24,7 +24,7 @@ Full details in the [CHANGELOG](CHANGELOG.md).
 - **Automatic Reverse Proxy Configuration**: Generates NGINX site configs, or a Caddyfile / caddy-docker-proxy labels if you prefer Caddy
 - **Zero-Downtime Experience**: Seamless proxying with startup loading pages
 - **Live Startup Page**: Browsers see a "starting server" page with live `docker compose` logs and a progress estimate that auto-reloads when the service is ready — or bring your own custom HTML page
-- **TCP Services**: Wake-on-connect for non-HTTP services like Minecraft and other game servers
+- **TCP & UDP Services**: Wake-on-connect for non-HTTP services like Minecraft, other game servers and WireGuard
 - **Start/Stop Hooks**: Run your own commands before a service starts and after it stops — or manage non-Docker services entirely with custom commands
 - **Resource Efficient**: Only runs containers when needed, saving CPU and memory
 - **Easy Configuration**: Single JSON file configuration for all services
@@ -348,9 +348,9 @@ to reach the wake proxy on the host:
    does exactly that.
 
 Configs from earlier DockerWakeUp versions keep working — the old
-path-prefixed form (`/proxy/<route>/…`) is still routed. `"type": "tcp"`
-services are the exception to all of this: they bypass HTTP entirely and use
-their own `listenPort`.
+path-prefixed form (`/proxy/<route>/…`) is still routed. `"type": "tcp"` and
+`"type": "udp"` services are the exception to all of this: they bypass HTTP
+entirely and use their own `listenPort`.
 
 ## Configuration ⚙️
 
@@ -382,13 +382,14 @@ non-Docker services, custom wake pages, log privacy, and the Caddy upstream —
 After editing: restart the wake proxy, and re-run the generator if routes or
 hostnames changed (see [Service Management](#service-management-️)).
 
-### TCP Services 🎮
+### TCP & UDP Services 🎮
 
-Non-HTTP services (Minecraft and other game servers, databases, ...) get
-wake-on-connect instead: set `"type": "tcp"` and a `listenPort`, and the wake
-proxy holds the first connection while the service starts, then pipes bytes
-through. TCP services bypass NGINX/Caddy entirely. Details in
-[CONFIGURATION.md](CONFIGURATION.md#tcp-services).
+Non-HTTP services (Minecraft and other game servers, databases, VPNs, ...) get
+wake-on-connect instead: set `"type": "tcp"` or `"type": "udp"` and a
+`listenPort`. The wake proxy holds the first connection (TCP) or queues the
+first datagrams (UDP) while the service starts, then relays traffic through.
+These services bypass NGINX/Caddy entirely. Details in
+[CONFIGURATION.md](CONFIGURATION.md#tcp-and-udp-services).
 
 ### Startup Page 🕓
 
@@ -470,7 +471,7 @@ cd proxy-generator && npm install && npm run caddy && cd ..
 ```
 
 Each HTTP service becomes one site, `jellyfin.yourdomain.com` → `/proxy/jellyfin/…`
-on the wake proxy, exactly like the NGINX configs (TCP services are skipped).
+on the wake proxy, exactly like the NGINX configs (TCP and UDP services are skipped).
 Nothing is installed or reloaded for you — unlike NGINX, Caddy picks the config
 up itself.
 

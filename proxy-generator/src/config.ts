@@ -7,7 +7,7 @@ import path from "path";
 export interface ServiceConfig {
   route: string;
   target: string;
-  type?: "http" | "tcp";
+  type?: "http" | "tcp" | "udp";
   domains?: string[]; // extra hostnames the wake proxy also answers for
 }
 
@@ -80,14 +80,14 @@ export function loadGeneratorConfig(configPath: string): LoadResult {
   };
 }
 
-/** The services that get an HTTP reverse proxy config; every tcp service is skipped with a message. */
+/** The services that get an HTTP reverse proxy config; every tcp/udp service is skipped with a message. */
 export function httpServices(config: Config): ServiceConfig[] {
   return config.services.filter((svc) => {
-    // Raw TCP services (game servers etc.) are proxied directly by the wake
-    // proxy's TCP listener — no HTTP reverse proxy config applies
-    if (svc.type === "tcp") {
+    // Raw TCP/UDP services (game servers, VPNs etc.) are proxied directly by
+    // the wake proxy's own listeners — no HTTP reverse proxy config applies
+    if (svc.type === "tcp" || svc.type === "udp") {
       console.log(
-        `Skipped ${svc.route}: type "tcp" services don't use an HTTP reverse proxy config`,
+        `Skipped ${svc.route}: type "${svc.type}" services don't use an HTTP reverse proxy config`,
       );
       return false;
     }

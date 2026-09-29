@@ -121,6 +121,20 @@ describe("httpServices", () => {
     expect(out.log).toEqual([SKIPPED]);
   });
 
+  it("skips udp services with a message too", () => {
+    const out = captureConsole();
+    const vpn = {
+      route: "vpn",
+      target: "127.0.0.1:51830",
+      type: "udp" as const,
+      listenPort: 51820,
+    };
+    expect(httpServices({ ...fullConfig, services: [vpn] })).toEqual([]);
+    expect(out.log).toEqual([
+      'Skipped vpn: type "udp" services don\'t use an HTTP reverse proxy config',
+    ]);
+  });
+
   it("returns an empty list when there are no services", () => {
     captureConsole();
     expect(httpServices({ domain: "example.com", services: [] })).toEqual([]);

@@ -6,7 +6,9 @@ import {
   PROJECT_ROOT,
   ROUTE_RE,
   indexServices,
+  isHttpService,
   isTcpService,
+  isUdpService,
   loadConfig,
   resolveConfigPath,
   type ServiceConfig,
@@ -131,6 +133,20 @@ describe("indexServices", () => {
     expect(console.error).toHaveBeenCalledWith('Service app: "target" is required — skipping');
   });
 
+  it("skips udp services without a usable listenPort", () => {
+    const udp = { ...tcp, route: "vpn", type: "udp" as const };
+    expect(
+      indexServices([
+        { ...udp, listenPort: undefined },
+        { ...udp, listenPort: 0 },
+      ]),
+    ).toEqual({});
+    expect(console.error).toHaveBeenCalledWith(
+      'Service vpn: type "udp" requires a listenPort — skipping',
+    );
+    expect(indexServices([udp])).toEqual({ vpn: udp });
+  });
+
   it("skips tcp services without a usable listenPort", () => {
     const bad = [
       { ...tcp, listenPort: undefined },
@@ -172,5 +188,16 @@ describe("isTcpService", () => {
     expect(isTcpService({ route: "a", target: "x", type: "tcp", listenPort: 1 })).toBe(true);
     expect(isTcpService({ route: "a", target: "x", type: "http" })).toBe(false);
     expect(isTcpService({ route: "a", target: "x" })).toBe(false);
+  });
+});
+
+describe("isUdpService / isHttpService", () => {
+  it("narrow on the type field", () => {
+    expect(isUdpService({ route: "a", target: "x", type: "udp", listenPort: 1 })).toBe(true);
+    expect(isUdpService({ route: "a", target: "x", type: "tcp", listenPort: 1 })).toBe(false);
+    expect(isHttpService({ route: "a", target: "x" })).toBe(true);
+    expect(isHttpService({ route: "a", target: "x", type: "http" })).toBe(true);
+    expect(isHttpService({ route: "a", target: "x", type: "tcp" })).toBe(false);
+    expect(isHttpService({ route: "a", target: "x", type: "udp" })).toBe(false);
   });
 });

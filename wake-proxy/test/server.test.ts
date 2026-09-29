@@ -3,9 +3,10 @@ import net from "net";
 import request from "supertest";
 import * as idleShutdown from "../src/idleShutdown";
 import * as tcpProxy from "../src/tcpProxy";
+import * as udpProxy from "../src/udpProxy";
 import * as updateChecker from "../src/updateChecker";
 import { assertShellAvailable, listenAddress, startServer, type RunningProxy } from "../src/server";
-import { getFreePort, mockConsole, useTempStateDir, waitUntil } from "./helpers";
+import { getFreePort, getFreeUdpPort, mockConsole, useTempStateDir, waitUntil } from "./helpers";
 
 const console = mockConsole();
 useTempStateDir();
@@ -79,6 +80,28 @@ describe("startServer", () => {
 
     expect(startIdle).toHaveBeenCalledWith(running.services, 3600);
     expect(startUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts one UDP proxy per udp service and closes it with the server", async () => {
+    const startUdp = jest.spyOn(udpProxy, "startUdpProxy");
+    const proxyPort = await getFreePort();
+    const listenPort = await getFreeUdpPort();
+    running = startServer({
+      proxyPort,
+      bindHost: "127.0.0.1",
+      updateCheck: false,
+      services: [
+        { route: "vpn", target: "127.0.0.1:1", type: "udp", listenPort, composeDir: "/x" },
+        { route: "app", target: "http://127.0.0.1:1", composeDir: "/x" },
+      ],
+    });
+    await waitUntil(() => running!.server.listening);
+    expect(startUdp).toHaveBeenCalledTimes(1);
+    expect(running.udpProxies).toHaveLength(1);
+    const close = jest.spyOn(running.udpProxies[0], "close");
+    await running.close();
+    running = undefined;
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("binds all interfaces by default and skips the update check when disabled", async () => {

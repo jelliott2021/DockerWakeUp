@@ -1,6 +1,6 @@
 /**
- * Process-level wiring: the HTTP listener, the TCP wake proxies, the idle
- * checker and the update checker.
+ * Process-level wiring: the HTTP listener, the TCP and UDP wake proxies, the
+ * idle checker and the update checker.
  */
 import fs from "fs";
 import type http from "http";
@@ -11,16 +11,19 @@ import {
   DEFAULT_PROXY_PORT,
   indexServices,
   isTcpService,
+  isUdpService,
   type ServiceMap,
 } from "./config";
 import { startIdleShutdownChecker } from "./idleShutdown";
 import { startTcpProxy, type TcpProxyHandle } from "./tcpProxy";
+import { startUdpProxy, type UdpProxyHandle } from "./udpProxy";
 import { startUpdateChecker } from "./updateChecker";
 
 export interface RunningProxy {
   server: http.Server;
   services: ServiceMap;
   tcpProxies: TcpProxyHandle[];
+  udpProxies: UdpProxyHandle[];
   /** Stop listening, drop open connections and cancel the timers. */
   close(): Promise<void>;
 }
@@ -55,6 +58,9 @@ export function startServer(config: Config): RunningProxy {
   const tcpProxies = Object.values(services)
     .filter(isTcpService)
     .map((svc) => startTcpProxy(svc));
+  const udpProxies = Object.values(services)
+    .filter(isUdpService)
+    .map((svc) => startUdpProxy(svc));
   const idleTimer = startIdleShutdownChecker(services, config.idleThreshold);
   const updateTimer = config.updateCheck !== false ? startUpdateChecker() : null;
 
@@ -62,10 +68,12 @@ export function startServer(config: Config): RunningProxy {
     server,
     services,
     tcpProxies,
+    udpProxies,
     close: async () => {
       if (idleTimer) clearInterval(idleTimer);
       if (updateTimer) clearInterval(updateTimer);
       await Promise.all(tcpProxies.map((proxy) => proxy.close()));
+      await Promise.all(udpProxies.map((proxy) => proxy.close()));
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));

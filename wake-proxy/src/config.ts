@@ -12,15 +12,15 @@ import { errorMessage } from "./util";
 export interface ServiceConfig {
   /** Service name and subdomain label — letters, digits and dashes only */
   route: string;
-  /** Where the service listens once awake: `http://host:port`, or `host:port` for TCP */
+  /** Where the service listens once awake: `http://host:port`, or `host:port` for TCP/UDP */
   target: string;
   /** Directory with the service's compose file; waking runs `docker compose up -d` here */
   composeDir?: string;
   /** `false` exempts the service from idle shutdown */
   autoOff?: boolean;
-  /** `"tcp"` proxies raw bytes (game servers etc.); default `"http"` */
-  type?: "http" | "tcp";
-  /** TCP only: port the wake proxy listens on for clients */
+  /** `"tcp"` / `"udp"` relay raw traffic (game servers, VPNs etc.); default `"http"` */
+  type?: "http" | "tcp" | "udp";
+  /** TCP/UDP only: port the wake proxy listens on for clients */
   listenPort?: number;
   /** Custom "starting up" HTML page (absolute, or relative to the project root) */
   wakePage?: string;
@@ -34,11 +34,21 @@ export interface ServiceConfig {
   logsCommand?: string;
   /** Extra hostnames that resolve to this service */
   domains?: string[];
+  /** Command printing Unix timestamps (seconds) of activity the proxy cannot see; the newest counts */
+  activityCommand?: string;
+  /** Per-service override of the global `idleThreshold` (seconds) */
+  idleThreshold?: number;
 }
 
 /** A `"type": "tcp"` service whose `listenPort` has been validated. */
 export interface TcpServiceConfig extends ServiceConfig {
   type: "tcp";
+  listenPort: number;
+}
+
+/** A `"type": "udp"` service whose `listenPort` has been validated. */
+export interface UdpServiceConfig extends ServiceConfig {
+  type: "udp";
   listenPort: number;
 }
 
@@ -106,6 +116,16 @@ export function isTcpService(svc: ServiceConfig): svc is TcpServiceConfig {
   return svc.type === "tcp";
 }
 
+/** `true` for `"type": "udp"` services (their listenPort is validated by `indexServices`). */
+export function isUdpService(svc: ServiceConfig): svc is UdpServiceConfig {
+  return svc.type === "udp";
+}
+
+/** `true` for services behind the HTTP reverse proxy (everything but tcp/udp). */
+export function isHttpService(svc: ServiceConfig): boolean {
+  return svc.type !== "tcp" && svc.type !== "udp";
+}
+
 /**
  * Validate the services and index them by route. Entries the proxy could not
  * serve safely are logged and skipped rather than crashing the whole proxy.
@@ -124,10 +144,10 @@ export function indexServices(services: ServiceConfig[]): ServiceMap {
       continue;
     }
     if (
-      svc.type === "tcp" &&
+      (svc.type === "tcp" || svc.type === "udp") &&
       !(Number.isInteger(svc.listenPort) && (svc.listenPort as number) > 0)
     ) {
-      console.error(`Service ${svc.route}: type "tcp" requires a listenPort — skipping`);
+      console.error(`Service ${svc.route}: type "${svc.type}" requires a listenPort — skipping`);
       continue;
     }
     if (!svc.composeDir && !svc.startCommand) {

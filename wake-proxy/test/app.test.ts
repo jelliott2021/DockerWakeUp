@@ -78,6 +78,7 @@ beforeAll(async () => {
         wakePage: path.join(wakePageDir, "custom.html"),
       },
       { route: "mc", target: "127.0.0.1:1", type: "tcp", listenPort: 1 },
+      { route: "vpn", target: "127.0.0.1:1", type: "udp", listenPort: 1 },
     ],
   };
   wakeApp = createApp(config, indexServices(config.services));
@@ -107,7 +108,7 @@ beforeEach(() => {
 const api = () => request(server);
 
 describe("createApp", () => {
-  it("creates one proxy per HTTP service and none for tcp services", () => {
+  it("creates one proxy per HTTP service and none for tcp or udp services", () => {
     expect(Object.keys(wakeApp.proxies).sort()).toEqual(["broken", "custom", "down", "up"]);
     expect(wakeApp.router.hosts["up.example.com"]).toBe("up");
   });
@@ -117,7 +118,7 @@ describe("GET /healthz", () => {
   it("answers direct local checks with full detail", async () => {
     const res = await api().get("/healthz");
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true, services: 5, update: getUpdateInfo() });
+    expect(res.body).toEqual({ ok: true, services: 6, update: getUpdateInfo() });
   });
 
   it("hides the detail from forwarded requests", async () => {

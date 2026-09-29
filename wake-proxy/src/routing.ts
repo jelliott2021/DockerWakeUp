@@ -6,7 +6,7 @@
  * header intact — no `/proxy/<route>` path rewrite. The prefixed
  * `/proxy/<route>` form keeps working for existing setups.
  */
-import { type ServiceMap } from "./config";
+import { isHttpService, type ServiceMap } from "./config";
 
 /** The subset of an incoming request the router looks at. */
 export interface RoutableRequest {
@@ -39,7 +39,7 @@ export interface HostRouter {
 export function createHostRouter(services: ServiceMap, domain?: string): HostRouter {
   const hosts: Record<string, string> = {};
   for (const svc of Object.values(services)) {
-    if (svc.type === "tcp") continue;
+    if (!isHttpService(svc)) continue;
     if (domain) hosts[`${svc.route}.${domain}`.toLowerCase()] = svc.route;
     for (const alias of svc.domains ?? []) hosts[alias.toLowerCase()] = svc.route;
   }
@@ -53,7 +53,7 @@ export function createHostRouter(services: ServiceMap, domain?: string): HostRou
     const host = raw.replace(/:\d+$/, "");
     if (hosts[host]) return hosts[host];
     const label = host.split(".")[0];
-    if (services[label] && services[label].type !== "tcp") return label;
+    if (services[label] && isHttpService(services[label])) return label;
     return null;
   }
 

@@ -47,7 +47,7 @@ export function captureConsole(): ConsoleCapture {
 /** A config with the domain the generators require. */
 export type TestConfig = Config & { domain: string };
 
-/** GeneratorSettings for `config` without touching the file system; tcp services are left out silently. */
+/** GeneratorSettings for `config` without touching the file system; tcp/udp services are left out silently. */
 export function settingsFor(
   config: TestConfig,
   configPath = "/srv/wakeup/config.json",
@@ -57,6 +57,6 @@ export function settingsFor(
     config,
     domain: config.domain,
     proxyPort: config.proxyPort || DEFAULT_PROXY_PORT,
-    services: config.services.filter((svc) => svc.type !== "tcp"),
+    services: config.services.filter((svc) => svc.type !== "tcp" && svc.type !== "udp"),
   };
 }
