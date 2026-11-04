@@ -24,8 +24,9 @@ the lockfiles stay self-contained and deployments keep working unchanged.
 
 ## Development setup
 
-Requirements: Node.js 20 or newer, Git, and (for the end-to-end tests) the
-Chromium that Playwright downloads.
+Requirements: Node.js 20 or newer, Git, ShellCheck, and (for the end-to-end
+tests) the Chromium that Playwright downloads. Install ShellCheck through your
+OS package manager (for example, `apt install shellcheck` on Debian/Ubuntu).
 
 ```bash
 git clone https://github.com/jelliott2021/DockerWakeUp.git

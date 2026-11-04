@@ -34,6 +34,7 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: ${{ env.LOCKFILES }}
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck
       - run: npm run install:all
       - run: npm run lint
       - run: npm run typecheck

@@ -231,9 +231,9 @@
             "exec": [
               "pm.test('status is 200', () => pm.response.to.have.status(200));",
               "const body = pm.response.json();",
-              "pm.test('path untouched, Host rewritten to the target', () => {",
+              "pm.test('path untouched and original Host preserved', () => {",
               "  pm.expect(body.url).to.equal('/api/items?x=1');",
-              "  pm.expect(body.headers.host).to.equal('127.0.0.1:' + pm.variables.get('upPort'));",
+              "  pm.expect(body.headers.host).to.equal(pm.variables.get('upHost'));",
               "});"
             ]
           }
