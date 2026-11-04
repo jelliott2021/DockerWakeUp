@@ -11,4 +11,5 @@ process.on("unhandledRejection", (reason) => {
   console.error("Unhandled rejection in wake-proxy:", reason);
 });
 
-startServer(loadConfig(resolveConfigPath()));
+const configPath = resolveConfigPath();
+startServer(loadConfig(configPath), configPath);

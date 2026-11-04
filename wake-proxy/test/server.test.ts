@@ -1,19 +1,28 @@
 import fs from "fs";
+import type http from "http";
 import net from "net";
 import request from "supertest";
 import * as idleShutdown from "../src/idleShutdown";
 import * as tcpProxy from "../src/tcpProxy";
 import * as updateChecker from "../src/updateChecker";
 import { assertShellAvailable, listenAddress, startServer, type RunningProxy } from "../src/server";
-import { getFreePort, mockConsole, useTempStateDir, waitUntil } from "./helpers";
+import { getFreePort, makeTempDir, mockConsole, useTempStateDir, waitUntil } from "./helpers";
 
 const console = mockConsole();
 useTempStateDir();
 
+function listensOnPort(server: http.Server, port: number): boolean {
+  const address = server.address();
+  return address !== null && typeof address !== "string" && address.port === port;
+}
+
 let running: RunningProxy | undefined;
+let configDir: string | undefined;
 afterEach(async () => {
   await running?.close();
   running = undefined;
+  if (configDir) fs.rmSync(configDir, { recursive: true, force: true });
+  configDir = undefined;
 });
 
 describe("assertShellAvailable", () => {
@@ -91,6 +100,158 @@ describe("startServer", () => {
     expect(console.log).toHaveBeenCalledWith(
       "Idle shutdown disabled (no idleThreshold in config.json)",
     );
+  });
+
+  it("reloads service and domain changes, retaining the current config on invalid JSON", async () => {
+    configDir = makeTempDir("wake-proxy-config-");
+    const configPath = `${configDir}/config.json`;
+    const proxyPort = await getFreePort();
+    const initialConfig = {
+      proxyPort,
+      bindHost: "127.0.0.1",
+      updateCheck: false,
+      domain: "old.example.test",
+      services: [{ route: "old", target: "http://127.0.0.1:1" }],
+    };
+    fs.writeFileSync(configPath, JSON.stringify(initialConfig));
+    running = startServer(initialConfig, configPath);
+    await waitUntil(() => running!.server.listening);
+    expect((await request(running.server).get("/proxy/old/__wake/status")).status).toBe(200);
+
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        ...initialConfig,
+        domain: "new.example.test",
+        services: [
+          { route: "fresh", target: "http://127.0.0.1:1", domains: ["alias.example.test"] },
+        ],
+      }),
+    );
+    await waitUntil(() => "fresh" in running!.services);
+    expect(running.services).toHaveProperty("fresh");
+    expect(running.services).not.toHaveProperty("old");
+    expect(
+      (await request(running.server).get("/__wake/status").set("Host", "alias.example.test"))
+        .status,
+    ).toBe(200);
+    expect((await request(running.server).get("/proxy/old/__wake/status")).status).toBe(404);
+
+    fs.writeFileSync(configPath, "{ invalid");
+    expect(await running.reloadConfig()).toBe(false);
+    expect(running.services).toHaveProperty("fresh");
+  });
+
+  it("rebinds the HTTP listener and reconciles TCP listeners live", async () => {
+    configDir = makeTempDir("wake-proxy-config-");
+    const configPath = `${configDir}/config.json`;
+    const proxyPort = await getFreePort();
+    const nextProxyPort = await getFreePort();
+    const tcpPort = await getFreePort();
+    const config = {
+      proxyPort,
+      bindHost: "127.0.0.1",
+      updateCheck: false,
+      services: [{ route: "old", target: "http://127.0.0.1:1" }],
+    };
+    fs.writeFileSync(configPath, JSON.stringify(config));
+    running = startServer(config, configPath);
+    await waitUntil(() => running!.server.listening);
+    const previousHttpServer = running.server;
+
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        ...config,
+        proxyPort: nextProxyPort,
+        services: [
+          { route: "fresh", target: "http://127.0.0.1:1" },
+          { route: "mc", target: "127.0.0.1:1", type: "tcp", listenPort: tcpPort },
+        ],
+      }),
+    );
+    expect(await running.reloadConfig()).toBe(true);
+    await waitUntil(
+      () =>
+        listensOnPort(running!.server, nextProxyPort) &&
+        running!.tcpProxies.length === 1 &&
+        running!.tcpProxies[0].server.listening,
+    );
+    expect(previousHttpServer.listening).toBe(false);
+    expect(running.services).toHaveProperty("fresh");
+    expect(running.tcpProxies[0].listenPort).toBe(tcpPort);
+    expect((await request(running.server).get("/healthz")).body.services).toBe(2);
+
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ ...config, proxyPort: nextProxyPort, services: [] }),
+    );
+    expect(await running.reloadConfig()).toBe(true);
+    await waitUntil(() => running!.tcpProxies.length === 0);
+    expect(running.services).toEqual({});
+  });
+
+  it("keeps the active HTTP listener and config when a new address cannot bind", async () => {
+    configDir = makeTempDir("wake-proxy-config-");
+    const configPath = `${configDir}/config.json`;
+    const proxyPort = await getFreePort();
+    const blockedPort = await getFreePort();
+    const blocker = net.createServer();
+    await new Promise<void>((resolve) => blocker.listen(blockedPort, "127.0.0.1", resolve));
+    const config = {
+      proxyPort,
+      bindHost: "127.0.0.1",
+      updateCheck: false,
+      services: [{ route: "old", target: "http://127.0.0.1:1" }],
+    };
+    fs.writeFileSync(configPath, JSON.stringify(config));
+    running = startServer(config, configPath);
+    await waitUntil(() => running!.server.listening);
+    const previousHttpServer = running.server;
+
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ ...config, proxyPort: blockedPort, services: [] }),
+    );
+    expect(await running.reloadConfig()).toBe(false);
+    expect(running.server).toBe(previousHttpServer);
+    expect(running.server.listening).toBe(true);
+    expect(running.services).toHaveProperty("old");
+    await new Promise<void>((resolve) => blocker.close(() => resolve()));
+  });
+
+  it("keeps the active services when a new TCP listener cannot bind", async () => {
+    configDir = makeTempDir("wake-proxy-config-");
+    const configPath = `${configDir}/config.json`;
+    const proxyPort = await getFreePort();
+    const blockedPort = await getFreePort();
+    const blocker = net.createServer();
+    await new Promise<void>((resolve) => blocker.listen(blockedPort, "127.0.0.1", resolve));
+    const config = {
+      proxyPort,
+      bindHost: "127.0.0.1",
+      updateCheck: false,
+      services: [{ route: "old", target: "http://127.0.0.1:1" }],
+    };
+    fs.writeFileSync(configPath, JSON.stringify(config));
+    running = startServer(config, configPath);
+    await waitUntil(() => running!.server.listening);
+
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        ...config,
+        services: [
+          { route: "fresh", target: "http://127.0.0.1:1" },
+          { route: "mc", target: "127.0.0.1:1", type: "tcp", listenPort: blockedPort },
+        ],
+      }),
+    );
+    expect(await running.reloadConfig()).toBe(false);
+    expect(running.services).toHaveProperty("old");
+    expect(running.services).not.toHaveProperty("fresh");
+    expect(running.tcpProxies).toHaveLength(0);
+    await new Promise<void>((resolve) => blocker.close(() => resolve()));
   });
 
   it("close() stops listening and rejects when the server was not running", async () => {

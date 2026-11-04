@@ -26,6 +26,10 @@ export interface TcpProxyOptions {
 
 export interface TcpProxyHandle {
   server: net.Server;
+  listenPort: number;
+  ready: Promise<boolean>;
+  /** Update the service used for future connections without interrupting active sessions. */
+  update(svc: TcpServiceConfig): void;
   /** Stop listening and drop every open connection. */
   close(): Promise<void>;
 }
@@ -38,13 +42,25 @@ export function startTcpProxy(
   const wakeTimeoutMs = options.wakeTimeoutMs ?? 90_000;
   const pollIntervalMs = options.pollIntervalMs ?? 2_000;
   const keepAliveIntervalMs = options.keepAliveIntervalMs ?? 60_000;
-  const { host, port } = parseHostPort(svc.target);
+  let currentService = svc;
   const sockets = new Set<net.Socket>();
-  let activeConnections = 0;
+  const activeByRoute = new Map<string, number>();
+  let resolveReady!: (ready: boolean) => void;
+  const ready = new Promise<boolean>((resolve) => {
+    resolveReady = resolve;
+  });
+  let readySettled = false;
+  const settleReady = (value: boolean) => {
+    if (readySettled) return;
+    readySettled = true;
+    resolveReady(value);
+  };
 
   // Keep the idle timer fresh while long-lived sessions are connected
   const keepAlive = setInterval(() => {
-    if (activeConnections > 0) touchLastAccess(svc.route);
+    for (const [route, count] of activeByRoute) {
+      if (count > 0) touchLastAccess(route);
+    }
   }, keepAliveIntervalMs);
   keepAlive.unref();
 
@@ -52,18 +68,25 @@ export function startTcpProxy(
     client.on("error", () => {});
     sockets.add(client);
     client.on("close", () => sockets.delete(client));
-    touchLastAccess(svc.route);
-    void handleConnection(client);
+    const connectionService = currentService;
+    const { host, port } = parseHostPort(connectionService.target);
+    touchLastAccess(connectionService.route);
+    void handleConnection(client, connectionService, host, port);
   });
 
-  async function handleConnection(client: net.Socket): Promise<void> {
+  async function handleConnection(
+    client: net.Socket,
+    connectionService: TcpServiceConfig,
+    host: string,
+    port: number,
+  ): Promise<void> {
     // Fast path: backend already up
     if (await isTcpReady(host, port)) {
-      pipe(client);
+      pipe(client, connectionService.route, host, port);
       return;
     }
 
-    void triggerWake(svc.route, svc);
+    void triggerWake(connectionService.route, connectionService);
 
     // Hold the client while the service wakes; many clients time out on
     // their own, so also stop waiting if the client hangs up
@@ -77,17 +100,19 @@ export function startTcpProxy(
       client.destroy();
       return;
     }
-    pipe(client);
+    pipe(client, connectionService.route, host, port);
   }
 
-  function pipe(client: net.Socket): void {
-    activeConnections++;
+  function pipe(client: net.Socket, route: string, host: string, port: number): void {
+    activeByRoute.set(route, (activeByRoute.get(route) ?? 0) + 1);
     let closed = false;
     const done = () => {
       if (closed) return;
       closed = true;
-      activeConnections--;
-      touchLastAccess(svc.route);
+      const active = (activeByRoute.get(route) ?? 1) - 1;
+      if (active === 0) activeByRoute.delete(route);
+      else activeByRoute.set(route, active);
+      touchLastAccess(route);
       client.destroy();
       backend.destroy();
     };
@@ -106,21 +131,42 @@ export function startTcpProxy(
   }
 
   server.on("error", (e: Error) => {
+    settleReady(false);
     console.error(
-      `TCP proxy for ${svc.route} failed on port ${svc.listenPort}: ${errorMessage(e)}`,
+      `TCP proxy for ${currentService.route} failed on port ${currentService.listenPort}: ${errorMessage(e)}`,
     );
   });
 
-  server.listen(svc.listenPort, () => {
-    console.log(`TCP wake proxy for ${svc.route}: :${svc.listenPort} -> ${host}:${port}`);
-  });
+  try {
+    server.listen(svc.listenPort, () => {
+      settleReady(true);
+      const { host, port } = parseHostPort(currentService.target);
+      console.log(
+        `TCP wake proxy for ${currentService.route}: :${currentService.listenPort} -> ${host}:${port}`,
+      );
+    });
+  } catch (e) {
+    settleReady(false);
+    console.error(
+      `TCP proxy for ${currentService.route} failed on port ${currentService.listenPort}: ${errorMessage(e)}`,
+    );
+  }
 
   return {
     server,
+    listenPort: svc.listenPort,
+    ready,
+    update: (nextService) => {
+      currentService = nextService;
+    },
     close: () =>
       new Promise((resolve) => {
         clearInterval(keepAlive);
         for (const sock of sockets) sock.destroy();
+        if (!server.listening) {
+          resolve();
+          return;
+        }
         server.close(() => resolve());
       }),
   };

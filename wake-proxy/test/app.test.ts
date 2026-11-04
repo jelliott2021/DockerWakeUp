@@ -210,7 +210,7 @@ describe("proxying to a running service", () => {
     const res = await api().get("/api/items?x=1").set("Host", "up.example.com");
     expect(res.status).toBe(200);
     expect(res.body.url).toBe("/api/items?x=1");
-    expect(res.body.headers.host).toBe(up.hostPort);
+    expect(res.body.headers.host).toBe("up.example.com");
   });
 
   it("routes by the /proxy/<route> prefix and strips it", async () => {
@@ -329,6 +329,7 @@ describe("WebSocket upgrades", () => {
     socket!.resetAndDestroy(); // a hard reset is an error on the proxy's side, which it ignores
     const handshake = up.requests[up.requests.length - 1];
     expect(handshake.url).toBe("/socket");
+    expect(handshake.headers.host).toBe("up.example.com");
     expect(handshake.headers["x-forwarded-proto"]).toBe("https");
     expect(getLastAccess("up")).not.toBeNull();
   });

@@ -4,13 +4,21 @@ Everything DockerWakeUp does is driven by one file: `config.json` in the
 project root (start from `config.json.example`). This is the complete
 reference; the [README](README.md) covers getting started.
 
-**Applying changes:** restart the wake proxy after editing —
-`sudo systemctl restart docker-wakeup` (SystemD) or
-`docker compose up -d --build` (Docker) — and re-run the reverse proxy
-generator when you added/removed services or changed hostnames
-(`./setup-service.sh` → option 4). Check `jq . config.json` if you're unsure
-the JSON is valid; `curl localhost:8080/healthz` shows how many services were
-loaded (full detail is only returned to local requests).
+**Applying changes:** the wake proxy watches `config.json` and applies valid
+changes automatically. If a save leaves invalid JSON, the last working config
+stays active and the error is logged. HTTP listen-address changes are applied
+by opening the new listener before closing the old one; if binding fails, the
+old listener and config stay active. TCP listeners are reconciled by port.
+Removed or replaced TCP listeners close their existing client connections;
+changing a target on the same TCP listen port affects new connections while
+existing connections continue to their current backend. In Docker, the host
+port published by Compose cannot be changed from inside the container, so
+changing `proxyPort` may still require updating the Compose port mapping and
+recreating the container. Re-run the reverse proxy generator when you
+added/removed services or changed hostnames (`./setup-service.sh` → option 4).
+Check `jq . config.json` if you're unsure the JSON is valid;
+`curl localhost:8080/healthz` shows how many services were loaded (full detail
+is only returned to local requests).
 
 ## Full example
 

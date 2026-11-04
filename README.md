@@ -379,8 +379,10 @@ non-Docker services, custom wake pages, log privacy, and the Caddy upstream —
 **the full reference with every option, defaults and recipes is in
 [CONFIGURATION.md](CONFIGURATION.md).**
 
-After editing: restart the wake proxy, and re-run the generator if routes or
-hostnames changed (see [Service Management](#service-management-️)).
+Config changes are applied live by the wake proxy. Re-run the generator if
+routes or hostnames changed (see [Service Management](#service-management-️)).
+When Docker publishes the wake proxy port, changing `proxyPort` also requires
+updating the Compose port mapping and recreating the container.
 
 ### TCP Services 🎮
 

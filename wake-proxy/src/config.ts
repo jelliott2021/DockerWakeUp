@@ -112,11 +112,23 @@ export function isTcpService(svc: ServiceConfig): svc is TcpServiceConfig {
  */
 export function indexServices(services: ServiceConfig[]): ServiceMap {
   const map: ServiceMap = {};
-  for (const svc of services) {
+  for (const candidate of services) {
+    if (!isObject(candidate)) {
+      console.error("Service entry must be an object — skipping");
+      continue;
+    }
+    const svc = candidate;
     if (!ROUTE_RE.test(svc.route ?? "")) {
       console.error(
         `Service route ${JSON.stringify(svc.route ?? null)} is invalid (letters, digits and dashes only) — skipping`,
       );
+      continue;
+    }
+    if (
+      svc.domains !== undefined &&
+      (!Array.isArray(svc.domains) || !svc.domains.every((domain) => typeof domain === "string"))
+    ) {
+      console.error(`Service ${svc.route}: "domains" must be an array of strings — skipping`);
       continue;
     }
     if (typeof svc.target !== "string" || svc.target.length === 0) {
@@ -125,7 +137,12 @@ export function indexServices(services: ServiceConfig[]): ServiceMap {
     }
     if (
       svc.type === "tcp" &&
-      !(Number.isInteger(svc.listenPort) && (svc.listenPort as number) > 0)
+      !(
+        typeof svc.listenPort === "number" &&
+        Number.isInteger(svc.listenPort) &&
+        svc.listenPort > 0 &&
+        svc.listenPort <= 65535
+      )
     ) {
       console.error(`Service ${svc.route}: type "tcp" requires a listenPort — skipping`);
       continue;
