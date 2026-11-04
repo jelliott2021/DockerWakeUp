@@ -24,7 +24,10 @@ describe("entry point", () => {
     });
     expect(configModule.resolveConfigPath).toHaveBeenCalledTimes(1);
     expect(configModule.loadConfig).toHaveBeenCalledWith("/etc/wakeup/config.json");
-    expect(serverModule.startServer).toHaveBeenCalledWith({ services: [] });
+    expect(serverModule.startServer).toHaveBeenCalledWith(
+      { services: [] },
+      "/etc/wakeup/config.json",
+    );
   });
 
   it("logs unhandled rejections instead of crashing", () => {

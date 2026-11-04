@@ -114,9 +114,10 @@ describe("indexServices", () => {
       { ...http, route: "a b" },
       { ...http, route: "a/b" },
       { ...http, route: undefined as unknown as string },
+      null as unknown as ServiceConfig,
     ];
     expect(indexServices(bad)).toEqual({});
-    expect(console.error).toHaveBeenCalledTimes(3);
+    expect(console.error).toHaveBeenCalledTimes(4);
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('"a b" is invalid'));
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("null is invalid"));
   });
@@ -131,15 +132,25 @@ describe("indexServices", () => {
     expect(console.error).toHaveBeenCalledWith('Service app: "target" is required — skipping');
   });
 
+  it("skips services with malformed hostname aliases", () => {
+    expect(
+      indexServices([{ ...http, domains: ["valid.example.test", 1] as unknown as string[] }]),
+    ).toEqual({});
+    expect(console.error).toHaveBeenCalledWith(
+      'Service app: "domains" must be an array of strings — skipping',
+    );
+  });
+
   it("skips tcp services without a usable listenPort", () => {
     const bad = [
       { ...tcp, listenPort: undefined },
       { ...tcp, listenPort: 0 },
       { ...tcp, listenPort: 1.5 },
+      { ...tcp, listenPort: 65536 },
       { ...tcp, listenPort: "25566" as unknown as number },
     ];
     expect(indexServices(bad)).toEqual({});
-    expect(console.error).toHaveBeenCalledTimes(4);
+    expect(console.error).toHaveBeenCalledTimes(5);
     expect(console.error).toHaveBeenCalledWith(
       'Service mc: type "tcp" requires a listenPort — skipping',
     );

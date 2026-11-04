@@ -18,11 +18,15 @@ export type ProxyMiddleware = RequestHandler;
 
 /** Preserve the original hostname/scheme so apps get proper CORS/CSRF/redirect behaviour. */
 function forwardOriginalHost(proxyReq: http.ClientRequest, req: http.IncomingMessage): void {
-  const host = req.headers["x-forwarded-host"];
-  if (host) {
-    proxyReq.setHeader("X-Forwarded-Host", host);
-    proxyReq.setHeader("Host", host);
+  const forwardedHost = req.headers["x-forwarded-host"];
+  if (forwardedHost) {
+    proxyReq.setHeader("X-Forwarded-Host", forwardedHost);
   }
+  const originalHost =
+    (Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost)?.split(",")[0]?.trim() ||
+    req.headers.host;
+  if (originalHost) proxyReq.setHeader("Host", originalHost);
+
   const proto = req.headers["x-forwarded-proto"];
   if (proto) proxyReq.setHeader("X-Forwarded-Proto", proto);
 }

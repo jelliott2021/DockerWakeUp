@@ -9,7 +9,7 @@ import type net from "net";
 import type { Duplex } from "stream";
 
 import { type Config, type ServiceMap } from "./config";
-import { createHostRouter, type HostRouter } from "./routing";
+import { createHostRouter, PROXY_PREFIX_RE, type HostRouter } from "./routing";
 import { createServiceProxy, type ProxyMiddleware } from "./proxy";
 import { getUpdateInfo } from "./updateChecker";
 import { sendWakeStatus, streamWakeLogs } from "./wakeEndpoints";
@@ -19,6 +19,8 @@ export interface WakeProxyApp {
   router: HostRouter;
   /** One proxy middleware per HTTP service, keyed by route */
   proxies: Record<string, ProxyMiddleware>;
+  /** Replace the live service table and its HTTP proxy middleware. */
+  updateServices(services: ServiceMap): void;
   /**
    * `upgrade` listener for the HTTP server. Upgrades never pass through
    * Express, so the route is resolved here — `/proxy/<route>` first, then the
@@ -33,6 +35,7 @@ export function createApp(config: Config, services: ServiceMap): WakeProxyApp {
   const app = express();
   const router = createHostRouter(services, config.domain);
   const proxies: Record<string, ProxyMiddleware> = {};
+  installProxies(services);
 
   // Liveness probe (used by the docker-compose healthcheck). On a hostname
   // that belongs to a service, fall through so the service's own /healthz is
@@ -78,16 +81,12 @@ export function createApp(config: Config, services: ServiceMap): WakeProxyApp {
     streamWakeLogs(services[route], req, res);
   });
 
-  for (const [route, svc] of Object.entries(services)) {
-    if (svc.type === "tcp") continue; // TCP services have their own listener
-    proxies[route] = createServiceProxy(route, svc, config);
-    app.use(`/proxy/${route}`, proxies[route]);
-  }
-
-  // Host-routed requests reuse the same per-service middleware
+  // Path- and host-routed requests share the current per-service middleware.
   app.use((req, res, next) => {
-    const route = router.routeForHost(req);
-    if (!route) return next();
+    const prefixed = PROXY_PREFIX_RE.exec(req.url ?? "");
+    const route =
+      (prefixed && proxies[prefixed[1]] ? prefixed[1] : null) ?? router.routeForHost(req);
+    if (!route || !proxies[route]) return next();
     proxies[route](req, res, next);
   });
 
@@ -104,7 +103,21 @@ export function createApp(config: Config, services: ServiceMap): WakeProxyApp {
     proxies[route].upgrade?.(req as express.Request, socket as net.Socket, head);
   }
 
-  return { app, router, proxies, handleUpgrade };
+  function updateServices(nextServices: ServiceMap): void {
+    for (const route of Object.keys(services)) delete services[route];
+    Object.assign(services, nextServices);
+    router.update(services, config.domain);
+    installProxies(services);
+  }
+
+  function installProxies(serviceMap: ServiceMap): void {
+    for (const route of Object.keys(proxies)) delete proxies[route];
+    for (const [route, svc] of Object.entries(serviceMap)) {
+      if (svc.type !== "tcp") proxies[route] = createServiceProxy(route, svc, config);
+    }
+  }
+
+  return { app, router, proxies, handleUpgrade, updateServices };
 }
 
 /** `true` for a request from loopback that did not pass through a reverse proxy. */

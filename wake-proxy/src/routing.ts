@@ -33,16 +33,25 @@ export interface HostRouter {
    * `isProxied` returns true are considered.
    */
   routeForUpgrade(req: RoutableRequest, isProxied: (route: string) => boolean): string | null;
+  update(services: ServiceMap, domain?: string): void;
 }
 
 /** Build the hostname map and matching functions for a set of services. */
 export function createHostRouter(services: ServiceMap, domain?: string): HostRouter {
   const hosts: Record<string, string> = {};
-  for (const svc of Object.values(services)) {
-    if (svc.type === "tcp") continue;
-    if (domain) hosts[`${svc.route}.${domain}`.toLowerCase()] = svc.route;
-    for (const alias of svc.domains ?? []) hosts[alias.toLowerCase()] = svc.route;
+  let currentServices = services;
+
+  function update(nextServices: ServiceMap, nextDomain?: string): void {
+    currentServices = nextServices;
+    for (const host of Object.keys(hosts)) delete hosts[host];
+    for (const svc of Object.values(currentServices)) {
+      if (svc.type === "tcp") continue;
+      if (nextDomain) hosts[`${svc.route}.${nextDomain}`.toLowerCase()] = svc.route;
+      for (const alias of svc.domains ?? []) hosts[alias.toLowerCase()] = svc.route;
+    }
   }
+
+  update(services, domain);
 
   function routeForHost(req: RoutableRequest): string | null {
     const raw = firstValue(req.headers["x-forwarded-host"] ?? req.headers.host)
@@ -53,7 +62,7 @@ export function createHostRouter(services: ServiceMap, domain?: string): HostRou
     const host = raw.replace(/:\d+$/, "");
     if (hosts[host]) return hosts[host];
     const label = host.split(".")[0];
-    if (services[label] && services[label].type !== "tcp") return label;
+    if (currentServices[label] && currentServices[label].type !== "tcp") return label;
     return null;
   }
 
@@ -67,7 +76,7 @@ export function createHostRouter(services: ServiceMap, domain?: string): HostRou
     return route && isProxied(route) ? route : null;
   }
 
-  return { hosts, routeForHost, routeForUpgrade };
+  return { hosts, routeForHost, routeForUpgrade, update };
 }
 
 function firstValue(value: string | string[] | undefined): string {
